@@ -25,10 +25,10 @@ jobs:
 
       # Налаштування Java
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       # Встановлення залежностей
       - name: Install dependencies
