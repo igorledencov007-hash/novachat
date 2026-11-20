@@ -34,7 +34,7 @@ jobs:
       - name: Build web application
         run: npm run build
 
-            - name: Setup Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
       - name: Sync Capacitor
