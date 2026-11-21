@@ -13,50 +13,51 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Завантаження репозиторію
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Налаштування Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      # Налаштування Java
       - name: Setup Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
 
-      # Встановлення залежностей
       - name: Install dependencies
         run: npm ci
 
-      # Збірка вебзастосунку
       - name: Build web application
         run: npm run build
 
-      # Налаштування Android SDK
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      # Синхронізація Capacitor
       - name: Sync Capacitor
         run: npx cap sync android
 
-      # Створення APK
-      - name: Build APK
+      - name: Prepare signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/app/novachat-release-key.jks
+          printf 'storePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "$STORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD" > android/keystore.properties
+
+      - name: Build signed APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease
 
-      # Завантаження готового APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NovaChat-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: NovaChat-Release-APK
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
