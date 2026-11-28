@@ -32,11 +32,149 @@ import {
   deleteDoc,
   updateDoc,
   orderBy,
-  limit
+  limit,
+  increment,
+  arrayUnion
 } from 'firebase/firestore'
 
 const BUCKET_NAME = 'novachat-media'
 const REACTIONS = ['❤️', '😂', '👍', '😮', '😢', '🔥']
+const POST_REACTIONS = ['🔥', '👏', '🤔', '😂', '❤️']
+
+const GIFTS_CATALOG = [
+  { id: 'rose', name: 'Троянда', icon: '🌹', price: 10, rarity: 'Звичайний' },
+  { id: 'heart', name: 'Серце', icon: '❤️', price: 25, rarity: 'Звичайний' },
+  { id: 'cake', name: 'Торт', icon: '🎂', price: 50, rarity: 'Рідкісний' },
+  { id: 'diamond', name: 'Діамант', icon: '💎', price: 100, rarity: 'Ексклюзив' },
+  { id: 'crown', name: 'Корона', icon: '👑', price: 500, rarity: 'Легендарний' }
+]
+
+const STAR_PACKS = [
+  { id: 'pack_50', stars: 50, label: '50 ⭐' },
+  { id: 'pack_250', stars: 250, label: '250 ⭐' },
+  { id: 'pack_1000', stars: 1000, label: '1000 ⭐' }
+]
+
+const PERSONALIZATION_ITEMS = [
+  {
+    id: 'theme_neon',
+    category: 'profileTheme',
+    categoryLabel: 'Оформлення профілю',
+    title: 'Неонова галактика',
+    value: 'neon',
+    price: 30,
+    preview: 'linear-gradient(135deg, #4f46e5, #06b6d4)'
+  },
+  {
+    id: 'theme_gold',
+    category: 'profileTheme',
+    categoryLabel: 'Оформлення профілю',
+    title: 'Золотий стандарт',
+    value: 'gold',
+    price: 60,
+    preview: 'linear-gradient(135deg, #f59e0b, #d97706)'
+  },
+  {
+    id: 'frame_glow',
+    category: 'avatarFrame',
+    categoryLabel: 'Рамка аватара',
+    title: 'Сяйво Nova',
+    value: 'glow',
+    price: 20,
+    preview: '2px solid #2aabee'
+  },
+  {
+    id: 'frame_vip',
+    category: 'avatarFrame',
+    categoryLabel: 'Рамка аватара',
+    title: 'Королівська рамка',
+    value: 'vip',
+    price: 75,
+    preview: '3px solid #f59e0b'
+  },
+  {
+    id: 'chatbg_midnight',
+    category: 'chatBg',
+    categoryLabel: 'Фон чату',
+    title: 'Нічний Telegram',
+    value: 'midnight',
+    price: 25,
+    preview: 'radial-gradient(circle at top, #1b2836, #0e1621)'
+  },
+  {
+    id: 'chatbg_aurora',
+    category: 'chatBg',
+    categoryLabel: 'Фон чату',
+    title: 'Північне сяйво',
+    value: 'aurora',
+    price: 45,
+    preview: 'linear-gradient(160deg, #0f172a, #1e1b4b, #134e4a)'
+  },
+  {
+    id: 'status_creator',
+    category: 'customStatus',
+    categoryLabel: 'Спеціальний статус',
+    title: '🚀 Автор ідей',
+    value: '🚀 Автор ідей',
+    price: 15,
+    preview: '#2aabee'
+  },
+  {
+    id: 'status_pro',
+    category: 'customStatus',
+    categoryLabel: 'Спеціальний статус',
+    title: '⚡ Nova Pro',
+    value: '⚡ Nova Pro',
+    price: 40,
+    preview: '#0088cc'
+  }
+]
+
+const DEFAULT_COMMUNITIES = [
+  {
+    id: 'tech',
+    name: 'Технології',
+    category: 'Технології',
+    description: 'Розробка, ПК, Android, WebRTC та гаджети.',
+    rules: 'Без спаму та реклами без погодження.',
+    isPrivate: false
+  },
+  {
+    id: 'games',
+    name: 'Ігри',
+    category: 'Ігри',
+    description: 'Обговорення ігор, пошук напарників і кліпи.',
+    rules: 'Спойлери ховаємо або попереджаємо.',
+    isPrivate: false
+  },
+  {
+    id: 'study',
+    name: 'Навчання',
+    category: 'Навчання',
+    description: 'Конспекти, задачі, проєкти та взаємодопомога.',
+    rules: 'Повага та зрозумілі формулювання питань.',
+    isPrivate: false
+  },
+  {
+    id: 'auto',
+    name: 'Автомобілі',
+    category: 'Автомобілі',
+    description: 'Авто, ремонт, експлуатація та поради водіям.',
+    rules: 'Лише конструктивні поради та обговорення.',
+    isPrivate: false
+  }
+]
+
+const normalizeHandle = raw => {
+  const cleaned = (raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9_]/g, '')
+  return cleaned ? `@${cleaned}` : ''
+}
+
+const normalizePhone = raw => (raw || '').replace(/[^\d+]/g, '').trim()
 
 async function uploadToSupabase(path, file, contentType) {
   const { error } = await supabase.storage
@@ -101,9 +239,72 @@ const formatAuthError = err => {
   return err?.message || 'Сталася помилка авторизації.'
 }
 
-function Avatar({ photoURL, className = 'avatar', fallback = '👤', alt = 'Аватар' }) {
+function generateNovaAiReply(promptText, mode = 'answer') {
+  const clean = (promptText || '').trim()
+  if (!clean) {
+    return 'Напиши запитання, тему для пояснення або чернетку повідомлення — і я підготую відповідь.'
+  }
+
+  const lower = clean.toLowerCase()
+
+  if (/^(привіт|вітаю|добрий день|добрий вечір|hi|hello)\b/i.test(lower)) {
+    return 'Привіт! Я **Nova AI**. Можу допомогти розібратися з помилками, пояснити складну тему, скласти текст або підготувати чернетку для чату чи стрічки. З чого почнемо?'
+  }
+
+  if (
+    lower.includes('помилк') ||
+    lower.includes('не працює') ||
+    lower.includes('error') ||
+    lower.includes('баг')
+  ) {
+    return [
+      `🔍 **Діагностика запиту:** «${clean}»`,
+      `1. Перевір текст помилки у вікні браузера або в консолі (**F12 → Console**).`,
+      `2. Звір назви змінних, станів (**useState**) і пропсів компонента, де виникає збій.`,
+      `3. Переконайся, що дані оновлюються і в стані React, і в стилях/базі даних без конфлікту імен.`
+    ].join('\n')
+  }
+
+  if (mode === 'study') {
+    return [
+      `📚 **Пояснення теми:** «${clean}»`,
+      `1. **Суть:** Розділи задачу на послідовні кроки та визнач вхідні умови.`,
+      `2. **Практика:** Застосуй основне правило на простому прикладі й перевір результат.`,
+      `3. **Підсумок:** Важливо розуміти причинно-наслідковий зв'язок кожного кроку.`
+    ].join('\n')
+  }
+
+  if (mode === 'draft') {
+    return `✉ **Чернетка повідомлення на тему «${clean}»:**\n\nПривіт! Хотів коротко поділитися думками щодо «${clean}»: ключові пункти вже зібрані, тож можемо обговорити деталі та обрати найкращий варіант.`
+  }
+
+  return `💡 **Відповідь Nova AI:** Щодо «${clean}» — сформулюй точну мету або уточни умови задачі, щоб я дав детальнішу інструкцію чи готовий приклад.`
+}
+
+function FormattedAiText({ text }) {
   return (
-    <div className={className}>
+    <div className="tg-ai-text">
+      {(text || '').split(/(\*\*.*?\*\*)/g).map((part, idx) =>
+        part.startsWith('**') && part.endsWith('**') ? (
+          <strong key={idx}>{part.slice(2, -2)}</strong>
+        ) : (
+          <span key={idx}>{part}</span>
+        )
+      )}
+    </div>
+  )
+}
+
+function Avatar({ photoURL, className = 'avatar', fallback = '👤', alt = 'Аватар', frame = '' }) {
+  const frameClass =
+    frame === 'glow'
+      ? 'avatar-frame-glow'
+      : frame === 'vip'
+        ? 'avatar-frame-vip'
+        : ''
+
+  return (
+    <div className={`${className} ${frameClass}`}>
       {photoURL ? <img src={photoURL} alt={alt} loading="lazy" /> : fallback}
     </div>
   )
@@ -113,25 +314,30 @@ function App() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // Авторизація
+  const [mainSection, setMainSection] = useState('chats')
+
   const [mode, setMode] = useState('login')
   const [name, setName] = useState('')
+  const [usernameInput, setUsernameInput] = useState('')
+  const [phoneInput, setPhoneInput] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  // Дзвінки та чати
   const [activeCall, setActiveCall] = useState(null)
   const [incomingCall, setIncomingCall] = useState(null)
   const [chats, setChats] = useState([])
-  const [chatFilter, setChatFilter] = useState('all') // 'all' | 'groups' | 'direct'
+  const [chatFilter, setChatFilter] = useState('all')
   const [activeId, setActiveId] = useState(null)
   const [messages, setMessages] = useState([])
   const [message, setMessage] = useState('')
   const [mobileChatOpen, setMobileChatOpen] = useState(false)
 
-  // Пошук користувачів та профілі
+  const [scheduleEnabled, setScheduleEnabled] = useState(false)
+  const [scheduleAt, setScheduleAt] = useState('')
+  const [scheduledMessages, setScheduledMessages] = useState([])
+
   const [search, setSearch] = useState('')
   const [showSearch, setShowSearch] = useState(false)
   const [searchResults, setSearchResults] = useState([])
@@ -140,23 +346,70 @@ function App() {
   const [profiles, setProfiles] = useState({})
   const [viewProfileUid, setViewProfileUid] = useState(null)
 
-  // Налаштування
   const [showSettings, setShowSettings] = useState(false)
   const [settingsTab, setSettingsTab] = useState('profile')
   const [profileName, setProfileName] = useState('')
+  const [profileUsername, setProfileUsername] = useState('')
+  const [profilePhone, setProfilePhone] = useState('')
+  const [phoneSearchable, setPhoneSearchable] = useState(true)
+  const [shareActivityPublicly, setShareActivityPublicly] = useState(true)
   const [profileAbout, setProfileAbout] = useState('')
   const [profilePhoto, setProfilePhoto] = useState('')
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('novaSound') !== 'false')
-  const [notificationsEnabled, setNotificationsEnabled] = useState(() => localStorage.getItem('novaNotifications') === 'true')
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    () => localStorage.getItem('novaNotifications') === 'true'
+  )
+  const [devicePermissions, setDevicePermissions] = useState({
+    notifications: typeof Notification !== 'undefined' ? Notification.permission : 'unsupported',
+    microphone: 'unknown',
+    camera: 'unknown'
+  })
   const [theme, setTheme] = useState(() => localStorage.getItem('novaTheme') || 'dark')
   const [language, setLanguage] = useState(() => localStorage.getItem('novaLanguage') || 'uk')
   const [settingsMessage, setSettingsMessage] = useState('')
   const [settingsError, setSettingsError] = useState('')
   const [settingsBusy, setSettingsBusy] = useState(false)
 
-  // Функції чату, історій та TikTok-кліпів
+  const [posts, setPosts] = useState([])
+  const [postSort, setPostSort] = useState('new')
+  const [postCommunityFilter, setPostCommunityFilter] = useState('all')
+  const [postTitle, setPostTitle] = useState('')
+  const [postBody, setPostBody] = useState('')
+  const [postCommunityId, setPostCommunityId] = useState('tech')
+  const [postMediaFile, setPostMediaFile] = useState(null)
+  const [pollQuestion, setPollQuestion] = useState('')
+  const [pollOptionsText, setPollOptionsText] = useState('')
+  const [commentDrafts, setCommentDrafts] = useState({})
+  const [replyTargetComment, setReplyTargetComment] = useState({})
+  const [repostTargetId, setRepostTargetId] = useState(null)
+
+  const [communities, setCommunities] = useState(DEFAULT_COMMUNITIES)
+  const [selectedCommunityId, setSelectedCommunityId] = useState(null)
+  const [onlyMyCommunities, setOnlyMyCommunities] = useState(false)
+  const [newCommName, setNewCommName] = useState('')
+  const [newCommCategory, setNewCommCategory] = useState('Технології')
+  const [newCommDesc, setNewCommDesc] = useState('')
+  const [newCommRules, setNewCommRules] = useState('Будьте ввічливими та дотримуйтесь правил спільноти.')
+  const [newCommPrivate, setNewCommPrivate] = useState(false)
+
+  const [starTransactions, setStarTransactions] = useState([])
+  const [giftRecipientUid, setGiftRecipientUid] = useState('')
+  const [supportAmount, setSupportAmount] = useState(25)
+  const [reportReason, setReportReason] = useState('')
+
+  const [friendActivities, setFriendActivities] = useState([])
+  const [aiMode, setAiMode] = useState('answer')
+  const [aiPrompt, setAiPrompt] = useState('')
+  const [aiHistory, setAiHistory] = useState([
+    {
+      id: 'welcome-ai',
+      role: 'assistant',
+      text: 'Привіт! Я **Nova AI**. Допоможу з відповідями на запитання, поясненням навчальних тем та чернетками текстів для чатів і стрічки.'
+    }
+  ])
+
   const [typingUsers, setTypingUsers] = useState([])
   const [replyTo, setReplyTo] = useState(null)
   const [editingMessage, setEditingMessage] = useState(null)
@@ -189,18 +442,85 @@ function App() {
   const fileInputRef = useRef(null)
   const storyInputRef = useRef(null)
   const reelInputRef = useRef(null)
+  const postMediaInputRef = useRef(null)
   const seenMessageIdsRef = useRef(new Set())
   const initialMessagesLoadedRef = useRef(false)
+  const viewedPostsSessionRef = useRef(new Set())
+
+  const myProfile = profiles[user?.uid] || {}
+  const myStars = typeof myProfile.stars === 'number' ? myProfile.stars : 100
+  const myKarma = typeof myProfile.karma === 'number' ? myProfile.karma : 0
+  const myFollowing = Array.isArray(myProfile.following) ? myProfile.following : []
+  const myJoinedCommunities = Array.isArray(myProfile.joinedCommunities)
+    ? myProfile.joinedCommunities
+    : ['tech', 'study']
+  const mySavedPosts = Array.isArray(myProfile.savedPosts) ? myProfile.savedPosts : []
+  const myBlockedUsers = Array.isArray(myProfile.blockedUsers) ? myProfile.blockedUsers : []
+  const myGifts = Array.isArray(myProfile.gifts) ? myProfile.gifts : []
+  const ownedItems = Array.isArray(myProfile.ownedPersonalization)
+    ? myProfile.ownedPersonalization
+    : []
+  const activePersonalization = myProfile.activePersonalization || {
+    profileTheme: 'default',
+    avatarFrame: 'none',
+    chatBg: 'default',
+    customStatus: ''
+  }
+  const supportStats = myProfile.supportStats || {
+    totalStarsReceived: 0,
+    supportersCount: 0,
+    topSupporters: []
+  }
+
+  const profileStats = useMemo(() => {
+    const myPosts = posts.filter(p => p.authorId === user?.uid)
+    const totalViews = myPosts.reduce((acc, p) => acc + (p.viewsCount || 0), 0)
+    const totalLikes = myPosts.reduce((acc, p) => acc + (p.upvotes?.length || 0), 0)
+    const totalReposts = myPosts.reduce((acc, p) => acc + (p.repostsCount || 0), 0)
+    const popularPosts = [...myPosts]
+      .sort(
+        (a, b) =>
+          (b.upvotes?.length || 0) +
+          (b.viewsCount || 0) * 0.1 -
+          ((a.upvotes?.length || 0) + (a.viewsCount || 0) * 0.1)
+      )
+      .slice(0, 4)
+
+    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
+    const weeklyPosts = myPosts.filter(
+      p => (p.createdAt?.toMillis?.() || 0) >= weekAgo
+    ).length
+    const weeklyLikes = myPosts
+      .filter(p => (p.createdAt?.toMillis?.() || 0) >= weekAgo)
+      .reduce((acc, p) => acc + (p.upvotes?.length || 0), 0)
+
+    return {
+      postsCount: myPosts.length,
+      followersCount: myProfile.followersCount || 0,
+      followingCount: myFollowing.length,
+      totalViews,
+      totalLikes,
+      totalReposts,
+      weeklyPosts,
+      weeklyLikes,
+      popularPosts
+    }
+  }, [posts, user?.uid, myProfile.followersCount, myFollowing.length])
 
   const activeChat = useMemo(
     () => chats.find(chat => chat.id === activeId) || null,
     [chats, activeId]
   )
   const filteredChats = useMemo(() => {
-    if (chatFilter === 'groups') return chats.filter(c => Boolean(c.isGroup))
-    if (chatFilter === 'direct') return chats.filter(c => !c.isGroup)
-    return chats
-  }, [chats, chatFilter])
+    const base = chats.filter(c => {
+      if (c.isGroup) return true
+      const peer = (c.participants || []).find(uid => uid !== user?.uid)
+      return !peer || !myBlockedUsers.includes(peer)
+    })
+    if (chatFilter === 'groups') return base.filter(c => Boolean(c.isGroup))
+    if (chatFilter === 'direct') return base.filter(c => !c.isGroup)
+    return base
+  }, [chats, chatFilter, user?.uid, myBlockedUsers])
 
   const participantIds = activeChat?.participants || []
   const otherUids = useMemo(
@@ -216,11 +536,33 @@ function App() {
 
   const filteredMessages = useMemo(() => {
     const q = chatSearchQuery.trim().toLowerCase()
-    if (!q) return messages
-    return messages.filter(m => (m.text || '').toLowerCase().includes(q))
-  }, [messages, chatSearchQuery])
+    const base = messages.filter(m => !myBlockedUsers.includes(m.senderId))
+    if (!q) return base
+    return base.filter(m => (m.text || '').toLowerCase().includes(q))
+  }, [messages, chatSearchQuery, myBlockedUsers])
 
   const currentReel = reels[reelIndex] || null
+
+  const visiblePosts = useMemo(() => {
+    const list = posts.filter(p => {
+      if (myBlockedUsers.includes(p.authorId)) return false
+      if (postCommunityFilter !== 'all' && p.communityId !== postCommunityFilter) return false
+      if (postSort === 'saved' && !mySavedPosts.includes(p.id)) return false
+      return true
+    })
+
+    if (postSort === 'top') {
+      return [...list].sort((a, b) => {
+        const scoreA = (a.upvotes?.length || 0) - (a.downvotes?.length || 0)
+        const scoreB = (b.upvotes?.length || 0) - (b.downvotes?.length || 0)
+        return scoreB - scoreA
+      })
+    }
+
+    return [...list].sort(
+      (a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0)
+    )
+  }, [posts, postCommunityFilter, postSort, mySavedPosts, myBlockedUsers])
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, currentUser => {
@@ -243,13 +585,60 @@ function App() {
     if (!user) return
     setProfileName(user.displayName || '')
     setProfilePhoto(user.photoURL || '')
-    getDoc(doc(db, 'users', user.uid))
-      .then(snap => {
+    const userRef = doc(db, 'users', user.uid)
+    getDoc(userRef)
+      .then(async snap => {
         if (snap.exists()) {
           const data = snap.data()
           setProfileName(data.name || user.displayName || '')
+          setProfileUsername(data.username || normalizeHandle(user.email?.split('@')[0] || 'user'))
+          setProfilePhone(data.phone || '')
+          setPhoneSearchable(data.phoneSearchable !== false)
+          setShareActivityPublicly(data.shareActivityPublicly !== false)
           setProfileAbout(data.about || '')
           setProfilePhoto(data.photoURL || user.photoURL || '')
+          if (typeof data.stars !== 'number') {
+            await setDoc(userRef, { stars: 100, karma: data.karma || 0 }, { merge: true })
+          }
+        } else {
+          const fallbackHandle = normalizeHandle(user.email?.split('@')[0] || 'user')
+          setProfileUsername(fallbackHandle)
+          await setDoc(
+            userRef,
+            {
+              uid: user.uid,
+              name: user.displayName || 'Користувач',
+              username: fallbackHandle,
+              phone: '',
+              phoneSearchable: true,
+              shareActivityPublicly: true,
+              email: user.email || '',
+              about: '',
+              photoURL: user.photoURL || '',
+              stars: 100,
+              karma: 0,
+              followersCount: 0,
+              following: [],
+              joinedCommunities: ['tech', 'study'],
+              savedPosts: [],
+              blockedUsers: [],
+              gifts: [],
+              ownedPersonalization: [],
+              activePersonalization: {
+                profileTheme: 'default',
+                avatarFrame: 'none',
+                chatBg: 'default',
+                customStatus: ''
+              },
+              supportStats: {
+                totalStarsReceived: 0,
+                supportersCount: 0,
+                topSupporters: []
+              },
+              createdAt: serverTimestamp()
+            },
+            { merge: true }
+          )
         }
       })
       .catch(console.error)
@@ -261,10 +650,13 @@ function App() {
       user.uid,
       ...chats.flatMap(c => c.participants || []),
       ...searchResults.map(x => x.uid).filter(Boolean),
-      ...(viewProfileUid ? [viewProfileUid] : [])
+      ...posts.map(p => p.authorId).filter(Boolean),
+      ...myFollowing,
+      ...(viewProfileUid ? [viewProfileUid] : []),
+      ...(giftRecipientUid ? [giftRecipientUid] : [])
     ])
     return [...set].sort()
-  }, [user, chats, searchResults, viewProfileUid])
+  }, [user, chats, searchResults, posts, myFollowing, viewProfileUid, giftRecipientUid])
 
   useEffect(() => {
     if (!user || trackedUserIds.length === 0) {
@@ -291,6 +683,113 @@ function App() {
 
     return () => unsubs.forEach(fn => fn())
   }, [user, trackedUserIds])
+
+  useEffect(() => {
+    if (!user || mainSection !== 'feed') return
+    visiblePosts.slice(0, 8).forEach(post => {
+      if (!post?.id || viewedPostsSessionRef.current.has(post.id)) return
+      viewedPostsSessionRef.current.add(post.id)
+      updateDoc(doc(db, 'posts', post.id), {
+        viewsCount: increment(1)
+      }).catch(() => {})
+    })
+  }, [user, mainSection, visiblePosts])
+
+  useEffect(() => {
+    if (!user || myFollowing.length === 0) {
+      setFriendActivities([])
+      return
+    }
+
+    const unsubs = myFollowing.slice(0, 12).map(friendUid =>
+      onSnapshot(
+        query(
+          collection(db, 'users', friendUid, 'activities'),
+          orderBy('createdAt', 'desc'),
+          limit(10)
+        ),
+        snap => {
+          const friendProfile = profiles[friendUid] || {}
+          if (friendProfile.shareActivityPublicly === false) return
+          const items = snap.docs.map(d => ({
+            id: `${friendUid}_${d.id}`,
+            friendUid,
+            friendName: friendProfile.name || 'Друг',
+            friendUsername: friendProfile.username || '@friend',
+            ...d.data()
+          }))
+
+          setFriendActivities(prev => {
+            const withoutFriend = prev.filter(x => x.friendUid !== friendUid)
+            return [...withoutFriend, ...items]
+              .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))
+              .slice(0, 25)
+          })
+        },
+        () => {}
+      )
+    )
+
+    return () => unsubs.forEach(fn => fn())
+  }, [user, myFollowing, profiles])
+
+  useEffect(() => {
+    if (!user) {
+      setScheduledMessages([])
+      return
+    }
+
+    const q = query(
+      collection(db, 'users', user.uid, 'scheduledMessages'),
+      orderBy('sendAtMs', 'asc'),
+      limit(30)
+    )
+
+    return onSnapshot(
+      q,
+      snap => {
+        setScheduledMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      },
+      () => {}
+    )
+  }, [user])
+
+  useEffect(() => {
+    if (!user || !scheduledMessages.length) return
+
+    const timer = window.setInterval(async () => {
+      const now = Date.now()
+      const due = scheduledMessages.filter(m => m.status === 'pending' && (m.sendAtMs || 0) <= now)
+
+      for (const item of due) {
+        try {
+          await addDoc(collection(db, 'chats', item.chatId, 'messages'), {
+            text: item.text,
+            senderId: user.uid,
+            senderName: profileName || user.displayName || 'Користувач',
+            scheduled: true,
+            read: false,
+            readBy: [user.uid],
+            createdAt: serverTimestamp()
+          })
+          await setDoc(
+            doc(db, 'chats', item.chatId),
+            { lastMessage: item.text, updatedAt: serverTimestamp() },
+            { merge: true }
+          )
+          await updateDoc(doc(db, 'users', user.uid, 'scheduledMessages', item.id), {
+            status: 'sent',
+            sentAt: serverTimestamp()
+          })
+          playSendSound()
+        } catch (err) {
+          console.error('Відкладене повідомлення:', err)
+        }
+      }
+    }, 10000)
+
+    return () => clearInterval(timer)
+  }, [user, scheduledMessages, profileName])
 
   useEffect(() => {
     if (!user) {
@@ -368,6 +867,20 @@ function App() {
     setChatSearchOpen(false)
     setChatSearchQuery('')
 
+    const markVisibleMessagesRead = list => {
+      if (document.hidden || mainSection !== 'chats') return
+      list.forEach(m => {
+        if (m.senderId === user.uid) return
+        const alreadyInReadBy = Array.isArray(m.readBy) && m.readBy.includes(user.uid)
+        if (!m.read || !alreadyInReadBy) {
+          updateDoc(doc(db, 'chats', activeId, 'messages', m.id), {
+            read: true,
+            readBy: arrayUnion(user.uid)
+          }).catch(() => {})
+        }
+      })
+    }
+
     const q = query(
       collection(db, 'chats', activeId, 'messages'),
       orderBy('createdAt', 'asc'),
@@ -381,20 +894,15 @@ function App() {
         setMessages(list)
 
         if (!initialMessagesLoadedRef.current) {
-          list.forEach(m => {
-            seenMessageIdsRef.current.add(m.id)
-            if (m.senderId !== user.uid && !m.read) {
-              updateDoc(doc(db, 'chats', activeId, 'messages', m.id), { read: true }).catch(() => {})
-            }
-          })
+          list.forEach(m => seenMessageIdsRef.current.add(m.id))
+          markVisibleMessagesRead(list)
           initialMessagesLoadedRef.current = true
           return
         }
 
+        markVisibleMessagesRead(list)
+
         list.forEach(m => {
-          if (m.senderId !== user.uid && !m.read && !document.hidden) {
-            updateDoc(doc(db, 'chats', activeId, 'messages', m.id), { read: true }).catch(() => {})
-          }
           if (!seenMessageIdsRef.current.has(m.id)) {
             seenMessageIdsRef.current.add(m.id)
             if (
@@ -416,7 +924,28 @@ function App() {
         setError('Не вдалося завантажити повідомлення.')
       }
     )
-  }, [user, activeId, notificationsEnabled, mobileChatOpen])
+  }, [user, activeId, mainSection, notificationsEnabled, mobileChatOpen])
+
+  useEffect(() => {
+    if (!user || !activeId || mainSection !== 'chats') return
+
+    const handleVisible = () => {
+      if (document.hidden) return
+      messages.forEach(m => {
+        if (m.senderId === user.uid) return
+        const alreadyInReadBy = Array.isArray(m.readBy) && m.readBy.includes(user.uid)
+        if (!m.read || !alreadyInReadBy) {
+          updateDoc(doc(db, 'chats', activeId, 'messages', m.id), {
+            read: true,
+            readBy: arrayUnion(user.uid)
+          }).catch(() => {})
+        }
+      })
+    }
+
+    document.addEventListener('visibilitychange', handleVisible)
+    return () => document.removeEventListener('visibilitychange', handleVisible)
+  }, [user, activeId, mainSection, messages])
 
   useEffect(() => {
     if (!user || !activeId) {
@@ -467,7 +996,6 @@ function App() {
     )
   }, [user])
 
-  // Стрічка коротких відео (TikTok / Reels)
   useEffect(() => {
     if (!user) {
       setReels([])
@@ -486,7 +1014,6 @@ function App() {
     )
   }, [user])
 
-  // Коментарі до поточного кліпу
   useEffect(() => {
     if (!user || !reelsOpen || !currentReel?.id) {
       setReelComments([])
@@ -506,6 +1033,58 @@ function App() {
       console.error
     )
   }, [user, reelsOpen, currentReel?.id])
+
+  useEffect(() => {
+    if (!user) {
+      setPosts([])
+      return
+    }
+    const q = query(collection(db, 'posts'), orderBy('createdAt', 'desc'), limit(80))
+    return onSnapshot(
+      q,
+      snap => {
+        setPosts(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      },
+      console.error
+    )
+  }, [user])
+
+  useEffect(() => {
+    if (!user) {
+      setCommunities(DEFAULT_COMMUNITIES)
+      return
+    }
+    const q = query(collection(db, 'communities'), limit(60))
+    return onSnapshot(
+      q,
+      snap => {
+        const custom = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        const map = new Map(DEFAULT_COMMUNITIES.map(c => [c.id, c]))
+        custom.forEach(c => map.set(c.id, { ...map.get(c.id), ...c }))
+        setCommunities([...map.values()])
+      },
+      console.error
+    )
+  }, [user])
+
+  useEffect(() => {
+    if (!user) {
+      setStarTransactions([])
+      return
+    }
+    const q = query(
+      collection(db, 'users', user.uid, 'starTransactions'),
+      orderBy('createdAt', 'desc'),
+      limit(50)
+    )
+    return onSnapshot(
+      q,
+      snap => {
+        setStarTransactions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      },
+      console.error
+    )
+  }, [user])
 
   useEffect(() => {
     if (!user) return
@@ -552,6 +1131,32 @@ function App() {
     }
   }, [])
 
+  async function addKarma(targetUid, delta) {
+    if (!targetUid || !delta) return
+    await updateDoc(doc(db, 'users', targetUid), {
+      karma: increment(delta)
+    }).catch(() => {})
+  }
+
+  async function logStarTransaction(uid, title, delta, meta = {}) {
+    if (!uid) return
+    await addDoc(collection(db, 'users', uid, 'starTransactions'), {
+      title,
+      delta,
+      ...meta,
+      createdAt: serverTimestamp()
+    }).catch(console.error)
+  }
+
+  async function recordFriendActivity(kind, label) {
+    if (!user?.uid || !shareActivityPublicly) return
+    await addDoc(collection(db, 'users', user.uid, 'activities'), {
+      kind,
+      label,
+      createdAt: serverTimestamp()
+    }).catch(() => {})
+  }
+
   async function handleAuth(e) {
     e.preventDefault()
     setError('')
@@ -571,18 +1176,47 @@ function App() {
       if (mode === 'register') {
         const cleanName = name.trim()
         const cleanEmail = email.trim().toLowerCase()
+        const cleanHandle =
+          normalizeHandle(usernameInput) || normalizeHandle(cleanEmail.split('@')[0]) || '@user'
+        const cleanPhone = normalizePhone(phoneInput)
+
         const result = await createUserWithEmailAndPassword(auth, cleanEmail, password)
         await updateProfile(result.user, { displayName: cleanName })
         await setDoc(doc(db, 'users', result.user.uid), {
           uid: result.user.uid,
           name: cleanName,
+          username: cleanHandle,
+          phone: cleanPhone,
+          phoneSearchable: true,
+          shareActivityPublicly: true,
           email: cleanEmail,
           about: '',
           photoURL: '',
+          stars: 100,
+          karma: 5,
+          followersCount: 0,
+          following: [],
+          joinedCommunities: ['tech', 'study'],
+          savedPosts: [],
+          blockedUsers: [],
+          gifts: [],
+          ownedPersonalization: [],
+          activePersonalization: {
+            profileTheme: 'default',
+            avatarFrame: 'none',
+            chatBg: 'default',
+            customStatus: ''
+          },
+          supportStats: {
+            totalStarsReceived: 0,
+            supportersCount: 0,
+            topSupporters: []
+          },
           createdAt: serverTimestamp(),
           isOnline: true,
           lastSeen: serverTimestamp()
         })
+        await logStarTransaction(result.user.uid, 'Стартовий бонус NovaStars', 100)
         setUser(result.user)
       } else {
         const result = await signInWithEmailAndPassword(auth, email.trim(), password)
@@ -628,14 +1262,23 @@ function App() {
       const cleanName = profileName.trim()
       if (!cleanName) throw new Error('Введи ім’я профілю.')
 
+      const cleanHandle = normalizeHandle(profileUsername) || '@user'
+      const cleanPhone = normalizePhone(profilePhone)
       const cleanPhoto = profilePhoto.trim()
       const cleanAbout = profileAbout.trim()
+
+      setProfileUsername(cleanHandle)
+      setProfilePhone(cleanPhone)
 
       await setDoc(
         doc(db, 'users', user.uid),
         {
           uid: user.uid,
           name: cleanName,
+          username: cleanHandle,
+          phone: cleanPhone,
+          phoneSearchable: Boolean(phoneSearchable),
+          shareActivityPublicly: Boolean(shareActivityPublicly),
           email: user.email,
           about: cleanAbout,
           photoURL: cleanPhoto,
@@ -717,6 +1360,7 @@ function App() {
   async function toggleBrowserNotifications(value) {
     if (value && 'Notification' in window && Notification.permission !== 'granted') {
       const permission = await Notification.requestPermission()
+      setDevicePermissions(prev => ({ ...prev, notifications: permission }))
       if (permission !== 'granted') {
         return showSettingsNotice('Дозвіл на сповіщення не надано.', true)
       }
@@ -724,6 +1368,60 @@ function App() {
     setNotificationsEnabled(value)
     localStorage.setItem('novaNotifications', String(value))
     showSettingsNotice(value ? 'Сповіщення увімкнено.' : 'Сповіщення вимкнено.')
+  }
+
+  async function requestNotificationPermissionInApp() {
+    if (!('Notification' in window)) {
+      return showSettingsNotice('Цей браузер/пристрій не підтримує сповіщення.', true)
+    }
+    const result = await Notification.requestPermission()
+    setDevicePermissions(prev => ({ ...prev, notifications: result }))
+    setNotificationsEnabled(result === 'granted')
+    localStorage.setItem('novaNotifications', String(result === 'granted'))
+    showSettingsNotice(
+      result === 'granted'
+        ? 'Дозвіл на сповіщення надано.'
+        : 'Дозвіл на сповіщення не надано або заблоковано.',
+      result !== 'granted'
+    )
+  }
+
+  async function requestMediaPermissionInApp(kind) {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      return showSettingsNotice(
+        'Медіапристрої недоступні. Перевір HTTPS або дозволи оболонки.',
+        true
+      )
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: kind === 'camera' ? { facingMode: 'user' } : false
+      })
+      stream.getTracks().forEach(track => track.stop())
+      setDevicePermissions(prev => ({
+        ...prev,
+        microphone: 'granted',
+        ...(kind === 'camera' ? { camera: 'granted' } : {})
+      }))
+      showSettingsNotice(
+        kind === 'camera'
+          ? 'Доступ до камери та мікрофона відкрито.'
+          : 'Доступ до мікрофона відкрито.'
+      )
+    } catch (err) {
+      setDevicePermissions(prev => ({
+        ...prev,
+        ...(kind === 'camera' ? { camera: 'denied' } : { microphone: 'denied' })
+      }))
+      showSettingsNotice(
+        err.name === 'NotAllowedError'
+          ? 'Дозвіл відхилено. Увімкни його у налаштуваннях браузера або Android.'
+          : err.message || 'Не вдалося отримати доступ до пристрою.',
+        true
+      )
+    }
   }
 
   function playSendSound() {
@@ -751,15 +1449,36 @@ function App() {
     e.preventDefault()
     setSearchError('')
     setSearchResults([])
-    const value = search.trim().toLowerCase()
-    if (!value) return setSearchError('Введи електронну пошту користувача.')
+    const raw = search.trim()
+    if (!raw) return setSearchError('Введи @username, ім’я, номер телефону або email.')
 
     setSearching(true)
     try {
-      const result = await getDocs(query(collection(db, 'users'), where('email', '==', value)))
-      const found = result.docs.map(d => d.data()).filter(x => x.uid !== user.uid)
+      const snap = await getDocs(query(collection(db, 'users'), limit(100)))
+      const qLower = raw.toLowerCase()
+      const qHandle = normalizeHandle(raw)
+      const qPhone = normalizePhone(raw)
+
+      const found = snap.docs
+        .map(d => ({ uid: d.id, ...d.data() }))
+        .filter(u => {
+          if (!u.uid || u.uid === user.uid || myBlockedUsers.includes(u.uid)) return false
+          const byEmail = (u.email || '').toLowerCase() === qLower
+          const byHandle = qHandle && (u.username || '').toLowerCase() === qHandle
+          const byName = (u.name || '').toLowerCase().includes(qLower)
+          const phoneAllowed = u.phoneSearchable !== false
+          const byPhone =
+            phoneAllowed &&
+            qPhone &&
+            qPhone.length >= 6 &&
+            normalizePhone(u.phone || '').includes(qPhone)
+          return byEmail || byHandle || byName || byPhone
+        })
+
       setSearchResults(found)
-      if (!found.length) setSearchError('Користувача не знайдено.')
+      if (!found.length) {
+        setSearchError('Користувача не знайдено або пошук за номером обмежено приватністю.')
+      }
     } catch (err) {
       console.error(err)
       setSearchError('Помилка пошуку. Перевір правила Firestore.')
@@ -785,6 +1504,484 @@ function App() {
     setMobileChatOpen(true)
   }
 
+  async function toggleFollowUser(targetUid) {
+    if (!targetUid || targetUid === user.uid) return
+    const isFollowing = myFollowing.includes(targetUid)
+    const nextFollowing = isFollowing
+      ? myFollowing.filter(x => x !== targetUid)
+      : [...myFollowing, targetUid]
+
+    await updateDoc(doc(db, 'users', user.uid), { following: nextFollowing }).catch(console.error)
+    await updateDoc(doc(db, 'users', targetUid), {
+      followersCount: increment(isFollowing ? -1 : 1)
+    }).catch(() => {})
+    if (!isFollowing) {
+      const targetName = profiles[targetUid]?.name || 'користувача'
+      await recordFriendActivity('follow', `підписався(лась) на ${targetName}`)
+    }
+  }
+
+  async function toggleBlockUser(targetUid) {
+    if (!targetUid || targetUid === user.uid) return
+    const blocked = myBlockedUsers.includes(targetUid)
+    const nextBlocked = blocked
+      ? myBlockedUsers.filter(x => x !== targetUid)
+      : [...myBlockedUsers, targetUid]
+    await updateDoc(doc(db, 'users', user.uid), { blockedUsers: nextBlocked }).catch(console.error)
+  }
+
+  async function reportTarget({ targetType, targetId, targetUserId }) {
+    const reason = reportReason.trim() || 'Порушення правил спільноти'
+    try {
+      await addDoc(collection(db, 'reports'), {
+        reporterId: user.uid,
+        targetType,
+        targetId,
+        targetUserId: targetUserId || '',
+        reason,
+        createdAt: serverTimestamp()
+      })
+      setReportReason('')
+      setError('Скаргу надіслано на модерацію.')
+    } catch (err) {
+      console.error(err)
+      setError('Не вдалося надіслати скаргу.')
+    }
+  }
+
+  async function createPost(e) {
+    e.preventDefault()
+    const title = postTitle.trim()
+    const body = postBody.trim()
+    if (!title || !body) return
+
+    setUploading(true)
+    setError('')
+    try {
+      let mediaUrl = ''
+      let mediaType = ''
+      if (postMediaFile) {
+        if (postMediaFile.size > 50 * 1024 * 1024) {
+          throw new Error('Максимальний розмір медіа — 50 МБ.')
+        }
+        const safeName = postMediaFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+        const path = `posts/${user.uid}/${Date.now()}_${safeName}`
+        mediaUrl = await uploadToSupabase(path, postMediaFile, postMediaFile.type)
+        mediaType = postMediaFile.type.startsWith('video/') ? 'video' : 'image'
+      }
+
+      const rawOptions = pollOptionsText
+        .split(/[,\n]/)
+        .map(s => s.trim())
+        .filter(Boolean)
+      const poll =
+        pollQuestion.trim() && rawOptions.length >= 2
+          ? {
+              question: pollQuestion.trim(),
+              options: rawOptions.map((label, idx) => ({ id: String(idx), label, votes: [] }))
+            }
+          : null
+
+      const comm = communities.find(c => c.id === postCommunityId) || communities[0]
+
+      await addDoc(collection(db, 'posts'), {
+        title,
+        body,
+        communityId: comm?.id || 'tech',
+        communityName: comm?.name || 'Технології',
+        authorId: user.uid,
+        authorName: profileName || user.displayName || 'Користувач',
+        authorUsername: profileUsername || '@user',
+        mediaUrl,
+        mediaType,
+        poll,
+        upvotes: [user.uid],
+        downvotes: [],
+        reactions: {},
+        comments: [],
+        viewsCount: 1,
+        repostsCount: 0,
+        starsReceived: 0,
+        createdAt: serverTimestamp()
+      })
+
+      await addKarma(user.uid, 3)
+      await recordFriendActivity('post', `опублікував(ла) допис «${title}»`)
+      setPostTitle('')
+      setPostBody('')
+      setPostMediaFile(null)
+      setPollQuestion('')
+      setPollOptionsText('')
+    } catch (err) {
+      console.error(err)
+      setError(err.message || 'Не вдалося створити публікацію.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  async function repostPostToFeed(post) {
+    if (!post) return
+    try {
+      await addDoc(collection(db, 'posts'), {
+        title: `🔁 ${post.title}`,
+        body: post.body,
+        communityId: post.communityId || 'tech',
+        communityName: post.communityName || 'Технології',
+        authorId: user.uid,
+        authorName: profileName || user.displayName || 'Користувач',
+        authorUsername: profileUsername || '@user',
+        mediaUrl: post.mediaUrl || '',
+        mediaType: post.mediaType || '',
+        repostOf: {
+          postId: post.id,
+          originalAuthorId: post.authorId,
+          originalAuthorName: post.authorName || 'Користувач',
+          originalAuthorUsername: post.authorUsername || '@user'
+        },
+        upvotes: [],
+        downvotes: [],
+        reactions: {},
+        comments: [],
+        viewsCount: 1,
+        repostsCount: 0,
+        starsReceived: 0,
+        createdAt: serverTimestamp()
+      })
+      await updateDoc(doc(db, 'posts', post.id), {
+        repostsCount: increment(1)
+      }).catch(() => {})
+      await recordFriendActivity('repost', `репостнув(ла) допис «${post.title}»`)
+      setRepostTargetId(null)
+      setError('🔁 Допис поширено у вашу стрічку!')
+    } catch (err) {
+      console.error(err)
+      setError('Не вдалося зробити репост.')
+    }
+  }
+
+  async function sharePostToChat(post, targetChatId) {
+    if (!post || !targetChatId) return
+    const text = `🔁 Репост допису «${post.title}» від ${post.authorName || 'Користувача'}:\n${post.body}`
+    try {
+      await addDoc(collection(db, 'chats', targetChatId, 'messages'), {
+        text,
+        senderId: user.uid,
+        senderName: profileName || user.displayName || 'Користувач',
+        read: false,
+        readBy: [user.uid],
+        createdAt: serverTimestamp()
+      })
+      await setDoc(
+        doc(db, 'chats', targetChatId),
+        { lastMessage: `🔁 ${post.title}`, updatedAt: serverTimestamp() },
+        { merge: true }
+      )
+      await updateDoc(doc(db, 'posts', post.id), {
+        repostsCount: increment(1)
+      }).catch(() => {})
+      playSendSound()
+      setRepostTargetId(null)
+      setError('✉ Допис надіслано в обраний чат!')
+    } catch (err) {
+      console.error(err)
+      setError('Не вдалося надіслати допис у чат.')
+    }
+  }
+
+  async function votePost(post, dir) {
+    if (!post?.id) return
+    const up = new Set(post.upvotes || [])
+    const down = new Set(post.downvotes || [])
+    let karmaDelta = 0
+
+    if (dir === 1) {
+      if (up.has(user.uid)) {
+        up.delete(user.uid)
+        karmaDelta = -1
+      } else {
+        up.add(user.uid)
+        if (down.has(user.uid)) karmaDelta += 1
+        down.delete(user.uid)
+        karmaDelta += 1
+      }
+    } else {
+      if (down.has(user.uid)) {
+        down.delete(user.uid)
+      } else {
+        down.add(user.uid)
+        if (up.has(user.uid)) karmaDelta -= 1
+        up.delete(user.uid)
+      }
+    }
+
+    await updateDoc(doc(db, 'posts', post.id), {
+      upvotes: [...up],
+      downvotes: [...down]
+    }).catch(console.error)
+
+    if (karmaDelta !== 0 && post.authorId !== user.uid) {
+      await addKarma(post.authorId, karmaDelta)
+    }
+  }
+
+  async function reactToPost(post, emoji) {
+    if (!post?.id) return
+    const reactions = { ...(post.reactions || {}) }
+    const list = new Set(reactions[emoji] || [])
+    if (list.has(user.uid)) list.delete(user.uid)
+    else list.add(user.uid)
+    if (list.size === 0) delete reactions[emoji]
+    else reactions[emoji] = [...list]
+
+    await updateDoc(doc(db, 'posts', post.id), { reactions }).catch(console.error)
+  }
+
+  async function votePoll(post, optionId) {
+    if (!post?.poll?.options) return
+    const nextOptions = post.poll.options.map(opt => {
+      const withoutMe = (opt.votes || []).filter(uid => uid !== user.uid)
+      if (opt.id === optionId && !(opt.votes || []).includes(user.uid)) {
+        return { ...opt, votes: [...withoutMe, user.uid] }
+      }
+      return { ...opt, votes: withoutMe }
+    })
+    await updateDoc(doc(db, 'posts', post.id), {
+      'poll.options': nextOptions
+    }).catch(console.error)
+  }
+
+  async function addPostComment(post) {
+    const text = (commentDrafts[post.id] || '').trim()
+    if (!text) return
+    const parentComment = replyTargetComment[post.id] || null
+
+    const nextComments = [
+      ...(post.comments || []),
+      {
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        authorId: user.uid,
+        authorName: profileName || user.displayName || 'Користувач',
+        authorUsername: profileUsername || '@user',
+        text,
+        parentId: parentComment?.id || null,
+        parentAuthor: parentComment?.authorName || null,
+        createdAt: Date.now()
+      }
+    ]
+
+    await updateDoc(doc(db, 'posts', post.id), { comments: nextComments }).catch(console.error)
+    setCommentDrafts(prev => ({ ...prev, [post.id]: '' }))
+    setReplyTargetComment(prev => ({ ...prev, [post.id]: null }))
+    if (post.authorId !== user.uid) await addKarma(post.authorId, 1)
+  }
+
+  async function toggleSavePost(postId) {
+    const exists = mySavedPosts.includes(postId)
+    const nextSaved = exists
+      ? mySavedPosts.filter(id => id !== postId)
+      : [...mySavedPosts, postId]
+    await updateDoc(doc(db, 'users', user.uid), { savedPosts: nextSaved }).catch(console.error)
+  }
+
+  async function createCommunity(e) {
+    e.preventDefault()
+    const cleanName = newCommName.trim()
+    if (!cleanName) return
+    const slug = `${cleanName.toLowerCase().replace(/[^a-z0-9а-яіїєґ]+/gi, '_')}_${Date.now().toString().slice(-4)}`
+
+    try {
+      await setDoc(doc(db, 'communities', slug), {
+        id: slug,
+        name: cleanName,
+        category: newCommCategory,
+        description: newCommDesc.trim() || 'Тематична спільнота NovaChat.',
+        rules: newCommRules.trim() || 'Дотримуйтесь правил спільноти.',
+        isPrivate: Boolean(newCommPrivate),
+        ownerId: user.uid,
+        moderators: [user.uid],
+        membersCount: 1,
+        createdAt: serverTimestamp()
+      })
+      const nextJoined = [...new Set([...myJoinedCommunities, slug])]
+      await updateDoc(doc(db, 'users', user.uid), { joinedCommunities: nextJoined }).catch(() => {})
+      await recordFriendActivity('community', `створив(ла) спільноту «${cleanName}»`)
+      setNewCommName('')
+      setNewCommDesc('')
+      setPostCommunityFilter(slug)
+      setPostCommunityId(slug)
+      setSelectedCommunityId(slug)
+    } catch (err) {
+      console.error(err)
+      setError('Не вдалося створити спільноту.')
+    }
+  }
+
+  async function toggleJoinCommunity(commId) {
+    const joined = myJoinedCommunities.includes(commId)
+    const nextJoined = joined
+      ? myJoinedCommunities.filter(id => id !== commId)
+      : [...myJoinedCommunities, commId]
+
+    await updateDoc(doc(db, 'users', user.uid), { joinedCommunities: nextJoined }).catch(console.error)
+    await updateDoc(doc(db, 'communities', commId), {
+      membersCount: increment(joined ? -1 : 1)
+    }).catch(() => {})
+    if (!joined) {
+      const comm = communities.find(c => c.id === commId)
+      await recordFriendActivity('community', `приєднався(лась) до спільноти «${comm?.name || commId}»`)
+    }
+  }
+
+  async function buyStarPack(pack) {
+    try {
+      const nextBalance = myStars + pack.stars
+      await setDoc(
+        doc(db, 'users', user.uid),
+        { stars: nextBalance },
+        { merge: true }
+      )
+      await logStarTransaction(
+        user.uid,
+        `Поповнення NovaStars (${pack.label})`,
+        pack.stars,
+        { type: 'purchase', packId: pack.id }
+      )
+    } catch (err) {
+      console.error(err)
+      setError('Не вдалося оновити баланс NovaStars.')
+    }
+  }
+
+  async function handlePersonalizationItem(item) {
+    const alreadyOwned = ownedItems.includes(item.id)
+    if (!alreadyOwned && myStars < item.price) {
+      return setError(`Недостатньо NovaStars для «${item.title}» (${item.price} ⭐).`)
+    }
+
+    try {
+      const nextOwned = alreadyOwned ? ownedItems : [...ownedItems, item.id]
+      const nextActive = {
+        ...activePersonalization,
+        [item.category]: item.value
+      }
+      const updates = {
+        ownedPersonalization: nextOwned,
+        activePersonalization: nextActive
+      }
+      if (!alreadyOwned) {
+        updates.stars = myStars - item.price
+      }
+
+      await setDoc(doc(db, 'users', user.uid), updates, { merge: true })
+
+      if (!alreadyOwned) {
+        await logStarTransaction(
+          user.uid,
+          `Персоналізація: ${item.title}`,
+          -item.price,
+          { type: 'personalization', itemId: item.id }
+        )
+        await recordFriendActivity('achievement', `отримав(ла) стиль «${item.title}»`)
+      }
+    } catch (err) {
+      console.error(err)
+      setError('Не вдалося застосувати елемент персоналізації.')
+    }
+  }
+
+  async function sendGiftToUser(gift, targetUid, postId = null, customStarsAmount = null) {
+    const recipientId = targetUid || giftRecipientUid
+    const amount =
+      typeof customStarsAmount === 'number' && customStarsAmount > 0
+        ? customStarsAmount
+        : gift.price
+
+    if (!recipientId) {
+      return setError('Обери отримувача підтримки або автора публікації.')
+    }
+    if (recipientId === user.uid) {
+      return setError('Не можна підтримати зірками самого себе.')
+    }
+    if (myStars < amount) {
+      return setError(`Недостатньо NovaStars (${amount} ⭐).`)
+    }
+
+    const recipient = profiles[recipientId] || {}
+    const senderLabel = profileName || user.displayName || 'Користувач'
+    const giftRecord = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      giftId: gift.id,
+      name: customStarsAmount ? `Підтримка автора (${amount} ⭐)` : gift.name,
+      icon: gift.icon,
+      price: amount,
+      rarity: gift.rarity,
+      fromUid: user.uid,
+      fromName: senderLabel,
+      fromUsername: profileUsername || '@user',
+      createdAt: Date.now()
+    }
+
+    const prevStats = recipient.supportStats || {
+      totalStarsReceived: 0,
+      supportersCount: 0,
+      topSupporters: []
+    }
+    const existingSupporter = (prevStats.topSupporters || []).find(s => s.uid === user.uid)
+    const nextSupporters = existingSupporter
+      ? (prevStats.topSupporters || []).map(s =>
+          s.uid === user.uid ? { ...s, stars: (s.stars || 0) + amount } : s
+        )
+      : [
+          ...(prevStats.topSupporters || []),
+          { uid: user.uid, name: senderLabel, stars: amount }
+        ]
+    nextSupporters.sort((a, b) => (b.stars || 0) - (a.stars || 0))
+
+    try {
+      await updateDoc(doc(db, 'users', user.uid), {
+        stars: myStars - amount
+      })
+      await setDoc(
+        doc(db, 'users', recipientId),
+        {
+          stars: increment(amount),
+          karma: increment(Math.max(1, Math.floor(amount / 10))),
+          gifts: [giftRecord, ...(Array.isArray(recipient.gifts) ? recipient.gifts : [])],
+          supportStats: {
+            totalStarsReceived: (prevStats.totalStarsReceived || 0) + amount,
+            supportersCount: existingSupporter
+              ? prevStats.supportersCount || nextSupporters.length
+              : (prevStats.supportersCount || 0) + 1,
+            topSupporters: nextSupporters.slice(0, 8)
+          }
+        },
+        { merge: true }
+      )
+      if (postId) {
+        await updateDoc(doc(db, 'posts', postId), {
+          starsReceived: increment(amount)
+        }).catch(() => {})
+      }
+
+      await logStarTransaction(
+        user.uid,
+        `Підтримка ${recipient.name || recipient.username || 'автора'} (${gift.icon} ${amount} ⭐)`,
+        -amount,
+        { type: 'support_sent', recipientId, postId: postId || null }
+      )
+      await logStarTransaction(
+        recipientId,
+        `Підтримка від ${senderLabel} (${gift.icon} +${amount} ⭐)`,
+        amount,
+        { type: 'support_received', senderId: user.uid, postId: postId || null }
+      )
+    } catch (err) {
+      console.error(err)
+      setError('Не вдалося надіслати підтримку.')
+    }
+  }
+
   async function openChat(otherUser) {
     try {
       const participants = [user.uid, otherUser.uid].sort()
@@ -803,6 +2000,7 @@ function App() {
         },
         { merge: true }
       )
+      setMainSection('chats')
       setActiveId(chatId)
       setViewProfileUid(null)
       setShowSearch(false)
@@ -862,6 +2060,7 @@ function App() {
         updatedAt: serverTimestamp()
       })
 
+      setMainSection('chats')
       setActiveId(chatRef.id)
       setShowGroupCreator(false)
       setGroupName('')
@@ -917,6 +2116,32 @@ function App() {
     const text = message.trim()
     if (!text || !activeId || !user) return
 
+    if (scheduleEnabled) {
+      const targetMs = scheduleAt ? new Date(scheduleAt).getTime() : Date.now() + 60000
+      if (!Number.isFinite(targetMs) || targetMs <= Date.now()) {
+        return setError('Обери майбутній час для відкладеного повідомлення.')
+      }
+
+      try {
+        await addDoc(collection(db, 'users', user.uid, 'scheduledMessages'), {
+          chatId: activeId,
+          chatName: activeName,
+          text,
+          sendAtMs: targetMs,
+          status: 'pending',
+          createdAt: serverTimestamp()
+        })
+        setMessage('')
+        setScheduleEnabled(false)
+        setScheduleAt('')
+        setError('⏰ Повідомлення заплановано до відправлення.')
+      } catch (err) {
+        console.error(err)
+        setError('Не вдалося запланувати повідомлення.')
+      }
+      return
+    }
+
     setMessage('')
     const currentReply = replyTo
     setReplyTo(null)
@@ -930,6 +2155,7 @@ function App() {
         senderId: user.uid,
         senderName: profileName || user.displayName || 'Користувач',
         read: false,
+        readBy: [user.uid],
         createdAt: serverTimestamp(),
         ...(currentReply
           ? {
@@ -953,6 +2179,13 @@ function App() {
       setReplyTo(currentReply)
       setError('Повідомлення не надіслано. Спробуй ще раз.')
     }
+  }
+
+  async function cancelScheduledMessage(schedId) {
+    if (!user?.uid || !schedId) return
+    await deleteDoc(doc(db, 'users', user.uid, 'scheduledMessages', schedId)).catch(() =>
+      setError('Не вдалося скасувати відкладене повідомлення.')
+    )
   }
 
   async function togglePinMessage(msg) {
@@ -996,6 +2229,7 @@ function App() {
         senderId: user.uid,
         senderName: profileName || user.displayName || 'Користувач',
         read: false,
+        readBy: [user.uid],
         createdAt: serverTimestamp()
       })
       playSendSound()
@@ -1057,6 +2291,7 @@ function App() {
             senderId: user.uid,
             senderName: profileName || user.displayName || 'Користувач',
             read: false,
+            readBy: [user.uid],
             createdAt: serverTimestamp()
           })
           playSendSound()
@@ -1181,6 +2416,7 @@ function App() {
         senderId: user.uid,
         senderName: myName,
         read: false,
+        readBy: [user.uid],
         createdAt: serverTimestamp()
       })
       playSendSound()
@@ -1341,6 +2577,19 @@ function App() {
     }).catch(console.error)
   }
 
+  function handleAskNovaAi(e) {
+    e.preventDefault()
+    const clean = aiPrompt.trim()
+    if (!clean) return
+    const replyText = generateNovaAiReply(clean, aiMode)
+    setAiHistory(prev => [
+      ...prev,
+      { id: `${Date.now()}_u`, role: 'user', text: clean },
+      { id: `${Date.now()}_a`, role: 'assistant', text: replyText }
+    ])
+    setAiPrompt('')
+  }
+
   const allStories = useMemo(() => {
     const active = stories.filter(s => !isExpired(s))
     const byUser = new Map()
@@ -1386,14 +2635,32 @@ function App() {
 
           <form onSubmit={handleAuth} className="auth-form">
             {mode === 'register' && (
-              <label>
-                Твоє ім’я
-                <input
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  placeholder="Наприклад, Ігор"
-                />
-              </label>
+              <>
+                <label>
+                  Твоє ім’я
+                  <input
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    placeholder="Наприклад, Ігор"
+                  />
+                </label>
+                <label>
+                  Username (@нікнейм)
+                  <input
+                    value={usernameInput}
+                    onChange={e => setUsernameInput(e.target.value)}
+                    placeholder="@igor"
+                  />
+                </label>
+                <label>
+                  Номер телефону (необов’язково)
+                  <input
+                    value={phoneInput}
+                    onChange={e => setPhoneInput(e.target.value)}
+                    placeholder="+380..."
+                  />
+                </label>
+              </>
             )}
 
             <label>
@@ -1444,14 +2711,59 @@ function App() {
     ? storyViewer.items[storyViewer.activeIndex] || storyViewer.items[0]
     : null
 
+  const knownUsersList = Object.values(profiles).filter(p => p.uid && p.uid !== user.uid)
+
   return (
-    <div className={`app ${mobileChatOpen ? 'mobile-chat-open' : ''}`}>
-      <aside className="sidebar">
-        <div className="logo">
+    <div
+      className={`app tg-app ${mobileChatOpen ? 'mobile-chat-open' : ''}`}
+      data-profile-theme={activePersonalization.profileTheme || 'default'}
+    >
+      <aside className="sidebar tg-sidebar">
+        <div className="logo tg-top-bar">
           <div className="logo-icon">N</div>
           <span>
             Nova<span className="logo-light">Chat</span>
           </span>
+          <button
+            type="button"
+            className="tool-chip tg-star-pill"
+            onClick={() => {
+              setMainSection('stars')
+              setSelectedCommunityId(null)
+              setShowSettings(false)
+              setViewProfileUid(null)
+              setReelsOpen(false)
+              setMobileChatOpen(true)
+            }}
+          >
+            ⭐ {myStars}
+          </button>
+        </div>
+
+        <div className="sidebar-tools tg-nav-strip">
+          {[
+            ['chats', '💬 Чати'],
+            ['feed', '📰 Стрічка'],
+            ['communities', '👥 Спільноти'],
+            ['stars', '🎁 Зірки'],
+            ['ai', '🤖 Nova AI']
+          ].map(([sec, label]) => (
+            <button
+              type="button"
+              key={sec}
+              className={`tool-chip ${mainSection === sec && !showSettings && !viewProfileUid && !reelsOpen ? 'active-chip' : ''}`}
+              onClick={() => {
+                setMainSection(sec)
+                setSelectedCommunityId(null)
+                setShowSettings(false)
+                setViewProfileUid(null)
+                setReelsOpen(false)
+                if (sec !== 'chats') setMobileChatOpen(true)
+              }}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
         <div className="stories-strip">
@@ -1462,7 +2774,11 @@ function App() {
             disabled={uploading}
           >
             <div className="story-ring story-ring-add">
-              <Avatar photoURL={profiles[user.uid]?.photoURL || profilePhoto} fallback="＋" />
+              <Avatar
+                photoURL={profiles[user.uid]?.photoURL || profilePhoto}
+                frame={activePersonalization.avatarFrame}
+                fallback="＋"
+              />
             </div>
             <small>Сторіз</small>
           </button>
@@ -1481,6 +2797,7 @@ function App() {
                   <div className="story-ring">
                     <Avatar
                       photoURL={latest.photoURL || profiles[item.uid]?.photoURL}
+                      frame={profiles[item.uid]?.activePersonalization?.avatarFrame}
                       fallback={initials(latest.userName)}
                     />
                   </div>
@@ -1496,7 +2813,11 @@ function App() {
               onClick={() => setStoryViewer(allStories.find(s => s.uid === user.uid))}
             >
               <div className="story-ring story-ring-mine">
-                <Avatar photoURL={profilePhoto} fallback="🧑🏻" />
+                <Avatar
+                  photoURL={profilePhoto}
+                  frame={activePersonalization.avatarFrame}
+                  fallback="🧑🏻"
+                />
               </div>
               <small>Моя історія</small>
             </button>
@@ -1519,7 +2840,7 @@ function App() {
           <button
             type="button"
             className="add-button"
-            title="Новий чат"
+            title="Пошук людей і новий чат"
             onClick={() => {
               setViewProfileUid(null)
               setShowGroupCreator(false)
@@ -1555,7 +2876,7 @@ function App() {
           </button>
         </div>
 
-        <div className="chat-filter-tabs">
+        <div className="chat-filter-tabs tg-tabs">
           {[
             ['all', 'Усі'],
             ['direct', 'Особисті'],
@@ -1601,7 +2922,7 @@ function App() {
             <form onSubmit={findUsers}>
               <input
                 className="search"
-                placeholder="Email користувача..."
+                placeholder="@username, ім'я, телефон або email..."
                 value={search}
                 onChange={e => setSearch(e.target.value)}
               />
@@ -1621,7 +2942,10 @@ function App() {
                     className="avatar-button"
                     onClick={() => showUserProfile(item.uid)}
                   >
-                    <Avatar photoURL={p.photoURL} />
+                    <Avatar
+                      photoURL={p.photoURL}
+                      frame={p.activePersonalization?.avatarFrame}
+                    />
                   </button>
                   <button
                     type="button"
@@ -1629,7 +2953,7 @@ function App() {
                     onClick={() => showUserProfile(item.uid)}
                   >
                     <strong>{p.name || 'Користувач'}</strong>
-                    <span>{p.email}</span>
+                    <span>{p.username || p.email}</span>
                   </button>
                   <button
                     type="button"
@@ -1657,8 +2981,9 @@ function App() {
               <button
                 type="button"
                 key={chat.id}
-                className={`chat-item ${activeId === chat.id && !showSettings && !viewProfileUid && !reelsOpen ? 'active' : ''}`}
+                className={`chat-item ${mainSection === 'chats' && activeId === chat.id && !showSettings && !viewProfileUid && !reelsOpen ? 'active' : ''}`}
                 onClick={() => {
+                  setMainSection('chats')
                   setActiveId(chat.id)
                   setViewProfileUid(null)
                   setShowSettings(false)
@@ -1670,13 +2995,19 @@ function App() {
                 <span className="avatar-wrap">
                   <Avatar
                     photoURL={chat.isGroup ? '' : p.photoURL}
+                    frame={chat.isGroup ? '' : p.activePersonalization?.avatarFrame}
                     fallback={chat.isGroup ? '👥' : '👤'}
                   />
                   {online && <i className="online-dot" title="У мережі" />}
                 </span>
                 <span className="chat-info">
                   <strong>{title}</strong>
-                  <span>{chat.lastMessage || 'Почни спілкування'}</span>
+                  <span>
+                    {p.activePersonalization?.customStatus
+                      ? `${p.activePersonalization.customStatus} · `
+                      : ''}
+                    {chat.lastMessage || 'Почни спілкування'}
+                  </span>
                 </span>
               </button>
             )
@@ -1689,7 +3020,7 @@ function App() {
           )}
         </div>
 
-        <div className="profile">
+        <div className="profile tg-footer-profile">
           <button
             type="button"
             className="avatar-button"
@@ -1704,6 +3035,7 @@ function App() {
             <Avatar
               className="avatar profile-avatar"
               photoURL={profiles[user.uid]?.photoURL || profilePhoto}
+              frame={activePersonalization.avatarFrame}
               fallback="🧑🏻"
             />
           </button>
@@ -1711,7 +3043,12 @@ function App() {
             <strong>
               {profiles[user.uid]?.name || profileName || user.displayName || 'Користувач'}
             </strong>
-            <span>{user.email}</span>
+            <span>
+              {activePersonalization.customStatus
+                ? `${activePersonalization.customStatus} · `
+                : ''}
+              Карма {myKarma}
+            </span>
           </div>
           <button
             type="button"
@@ -1730,10 +3067,10 @@ function App() {
         </div>
       </aside>
 
-      <main className="main">
+      <main className="main tg-main">
         {reelsOpen ? (
-          <section className="reels-page">
-            <header className="reels-header">
+          <section className="reels-page tg-scroll-section">
+            <header className="reels-header tg-header">
               <button
                 type="button"
                 className="mobile-back-button"
@@ -1852,11 +3189,13 @@ function App() {
             )}
           </section>
         ) : showSettings ? (
-          <section className="settings-page">
-            <header className="settings-header">
+          <section className="settings-page tg-scroll-section">
+            <header className="settings-header tg-header">
               <div>
                 <h1>Налаштування</h1>
-                <p>Керуй профілем та параметрами NovaChat</p>
+                <p>
+                  Керуй профілем, приватністю, кармою ({myKarma}) та балансом ({myStars} ⭐)
+                </p>
               </div>
               <button
                 type="button"
@@ -1874,8 +3213,10 @@ function App() {
               <nav className="settings-nav">
                 {[
                   ['profile', '👤 Профіль'],
+                  ['stats', '📊 Статистика'],
+                  ['privacy', '🛡️ Приватність'],
                   ['security', '🔒 Безпека'],
-                  ['notifications', '🔔 Сповіщення'],
+                  ['notifications', '🔔 Сповіщення та дозволи'],
                   ['appearance', '🎨 Тема'],
                   ['language', '🌐 Мова']
                 ].map(([tab, label]) => (
@@ -1909,6 +3250,24 @@ function App() {
                       />
                     </label>
                     <label>
+                      Username (@нікнейм)
+                      <input
+                        value={profileUsername}
+                        onChange={e => setProfileUsername(e.target.value)}
+                        placeholder="@igor"
+                        maxLength={32}
+                      />
+                    </label>
+                    <label>
+                      Номер телефону
+                      <input
+                        value={profilePhone}
+                        onChange={e => setProfilePhone(e.target.value)}
+                        placeholder="+380..."
+                        maxLength={24}
+                      />
+                    </label>
+                    <label>
                       Фото профілю (посилання)
                       <input
                         value={profilePhoto}
@@ -1929,10 +3288,113 @@ function App() {
                       Електронна пошта
                       <input value={user.email || ''} readOnly />
                     </label>
+
+                    <div className="group-members-list">
+                      <span className="group-member-pill">⭐ {myStars} NovaStars</span>
+                      <span className="group-member-pill">⚡ Карма: {myKarma}</span>
+                      <span className="group-member-pill">👥 Підписок: {myFollowing.length}</span>
+                      <span className="group-member-pill">🎁 Подарунків: {myGifts.length}</span>
+                    </div>
+
                     <button className="auth-submit" disabled={settingsBusy}>
                       {settingsBusy ? 'Збереження...' : 'Зберегти профіль'}
                     </button>
                   </form>
+                )}
+
+                {settingsTab === 'stats' && (
+                  <div className="settings-form">
+                    <h2>📊 Статистика профілю</h2>
+                    <div className="group-members-list">
+                      <span className="group-member-pill">
+                        👁 Переглядів дописів: {profileStats.totalViews}
+                      </span>
+                      <span className="group-member-pill">
+                        👍 Лайків: {profileStats.totalLikes}
+                      </span>
+                      <span className="group-member-pill">
+                        👥 Підписників: {profileStats.followersCount}
+                      </span>
+                      <span className="group-member-pill">
+                        🔁 Репостів: {profileStats.totalReposts}
+                      </span>
+                    </div>
+
+                    <div className="user-profile-about">
+                      <h3>За останній тиждень</h3>
+                      <p className="settings-muted">
+                        Опубліковано дописів: <b>{profileStats.weeklyPosts}</b> · Отримано лайків:{' '}
+                        <b>{profileStats.weeklyLikes}</b>
+                      </p>
+                    </div>
+
+                    <div className="user-profile-about">
+                      <h3>Популярні публікації</h3>
+                      {profileStats.popularPosts.length ? (
+                        profileStats.popularPosts.map(p => (
+                          <div key={p.id} className="reel-comment-item">
+                            <b>{p.title}</b> — <span>👁 {p.viewsCount || 0}</span> ·{' '}
+                            <span>▲ {(p.upvotes || []).length}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="settings-muted">
+                          Створи публікацію у Стрічці, щоб бачити її статистику.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {settingsTab === 'privacy' && (
+                  <div className="settings-form">
+                    <h2>Приватність та безпека</h2>
+                    <label className="settings-toggle">
+                      <span>
+                        <strong>Пошук за номером телефону</strong>
+                        <small>Дозволити іншим знаходити тебе за номером телефону</small>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={phoneSearchable}
+                        onChange={e => setPhoneSearchable(e.target.checked)}
+                      />
+                    </label>
+                    <label className="settings-toggle">
+                      <span>
+                        <strong>Показувати активність друзям</strong>
+                        <small>Дозволити друзям бачити твої нові дописи, спільноти та досягнення</small>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={shareActivityPublicly}
+                        onChange={e => setShareActivityPublicly(e.target.checked)}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="auth-submit"
+                      onClick={saveProfile}
+                      disabled={settingsBusy}
+                    >
+                      Зберегти приватність
+                    </button>
+                    <p className="settings-muted">
+                      Заблоковані користувачі: {myBlockedUsers.length}
+                    </p>
+                    {myBlockedUsers.map(uid => (
+                      <div key={uid} className="chat-item">
+                        <span>{profiles[uid]?.name || uid}</span>
+                        <button
+                          type="button"
+                          className="write-user-button"
+                          onClick={() => toggleBlockUser(uid)}
+                        >
+                          Розблокувати
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 )}
 
                 {settingsTab === 'security' && (
@@ -1986,7 +3448,7 @@ function App() {
 
                 {settingsTab === 'notifications' && (
                   <div className="settings-form">
-                    <h2>Сповіщення</h2>
+                    <h2>Сповіщення та дозволи</h2>
                     <label className="settings-toggle">
                       <span>
                         <strong>Звук повідомлень</strong>
@@ -2012,6 +3474,38 @@ function App() {
                         onChange={e => toggleBrowserNotifications(e.target.checked)}
                       />
                     </label>
+
+                    <div className="user-profile-about">
+                      <h3>Дозволи застосунку на пристрої</h3>
+                      <p className="settings-muted">
+                        Сповіщення: <b>{devicePermissions.notifications}</b> · Мікрофон:{' '}
+                        <b>{devicePermissions.microphone}</b> · Камера:{' '}
+                        <b>{devicePermissions.camera}</b>
+                      </p>
+                      <div className="sidebar-tools">
+                        <button
+                          type="button"
+                          className="tool-chip"
+                          onClick={requestNotificationPermissionInApp}
+                        >
+                          🔔 Дозволити сповіщення
+                        </button>
+                        <button
+                          type="button"
+                          className="tool-chip"
+                          onClick={() => requestMediaPermissionInApp('microphone')}
+                        >
+                          🎤 Дозволити мікрофон
+                        </button>
+                        <button
+                          type="button"
+                          className="tool-chip"
+                          onClick={() => requestMediaPermissionInApp('camera')}
+                        >
+                          🎥 Дозволити камеру
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -2059,8 +3553,8 @@ function App() {
             </div>
           </section>
         ) : viewProfileUid ? (
-          <section className="user-profile-page">
-            <header className="user-profile-header">
+          <section className="user-profile-page tg-scroll-section">
+            <header className="user-profile-header tg-header">
               <button
                 type="button"
                 className="header-button"
@@ -2075,13 +3569,29 @@ function App() {
             </header>
 
             <div className="user-profile-card">
-              <Avatar className="user-profile-avatar" photoURL={viewedProfile.photoURL} />
+              <Avatar
+                className="user-profile-avatar"
+                photoURL={viewedProfile.photoURL}
+                frame={viewedProfile.activePersonalization?.avatarFrame}
+              />
               <h1>{viewedProfile.name || 'Користувач'}</h1>
-              <p className="user-profile-email">{viewedProfile.email}</p>
+              <p className="user-profile-email">
+                {viewedProfile.username || '@user'} · {viewedProfile.email}
+              </p>
+              {viewedProfile.activePersonalization?.customStatus && (
+                <p className="group-member-pill">
+                  {viewedProfile.activePersonalization.customStatus}
+                </p>
+              )}
               <p className="presence-text">
                 {viewedProfile.isOnline
                   ? '🟢 У мережі'
                   : `Був(ла) у мережі: ${lastSeenText(viewedProfile.lastSeen)}`}
+              </p>
+              <p className="settings-muted">
+                ⚡ Карма: {viewedProfile.karma || 0} · 👥 Підписників:{' '}
+                {viewedProfile.followersCount || 0} · 🎁 Подарунків:{' '}
+                {(viewedProfile.gifts || []).length}
               </p>
               <div className="user-profile-about">
                 <h3>Про себе</h3>
@@ -2089,23 +3599,916 @@ function App() {
                   {viewedProfile.about || 'Користувач ще нічого не розповів про себе.'}
                 </p>
               </div>
+
+              <div className="sidebar-tools">
+                <button
+                  type="button"
+                  className="auth-submit user-profile-message"
+                  onClick={() =>
+                    openChat({
+                      uid: viewProfileUid,
+                      name: viewedProfile.name || 'Користувач'
+                    })
+                  }
+                >
+                  ✉ Написати
+                </button>
+                <button
+                  type="button"
+                  className="tool-chip"
+                  onClick={() => toggleFollowUser(viewProfileUid)}
+                >
+                  {myFollowing.includes(viewProfileUid) ? '✓ Підписаний' : '+ Підписатися'}
+                </button>
+                <button
+                  type="button"
+                  className="tool-chip"
+                  onClick={() => toggleBlockUser(viewProfileUid)}
+                >
+                  {myBlockedUsers.includes(viewProfileUid) ? 'Розблокувати' : '🚫 Заблокувати'}
+                </button>
+              </div>
+
+              <div className="group-creator">
+                <span className="settings-muted">Підтримати автора зірками:</span>
+                <div className="sidebar-tools">
+                  {GIFTS_CATALOG.slice(0, 3).map(g => (
+                    <button
+                      type="button"
+                      key={g.id}
+                      className="tool-chip"
+                      onClick={() => sendGiftToUser(g, viewProfileUid)}
+                    >
+                      {g.icon} {g.name} ({g.price}⭐)
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+        ) : mainSection === 'feed' ? (
+          <section className="settings-page tg-scroll-section">
+            <header className="settings-header tg-header">
+              <div>
+                <h1>📰 Стрічка NovaChat</h1>
+                <p>Публікації, репости, опитування, активність друзів та підтримка авторів</p>
+              </div>
               <button
                 type="button"
-                className="auth-submit user-profile-message"
-                onClick={() =>
-                  openChat({
-                    uid: viewProfileUid,
-                    name: viewedProfile.name || 'Користувач'
-                  })
-                }
+                className="mobile-back-button"
+                onClick={() => {
+                  setMainSection('chats')
+                  setMobileChatOpen(false)
+                }}
               >
-                ✉ Написати повідомлення
+                ←
               </button>
+            </header>
+
+            <div className="tg-section-body">
+              {friendActivities.length > 0 && (
+                <div className="settings-form">
+                  <h3>⚡ Активність друзів</h3>
+                  {friendActivities.slice(0, 5).map(act => (
+                    <div key={act.id} className="reel-comment-item">
+                      <b>{act.friendName}</b> <span>{act.label}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <form className="settings-form" onSubmit={createPost}>
+                <h3>Нова публікація</h3>
+                <input
+                  value={postTitle}
+                  onChange={e => setPostTitle(e.target.value)}
+                  placeholder="Заголовок допису або запитання..."
+                  required
+                />
+                <textarea
+                  value={postBody}
+                  onChange={e => setPostBody(e.target.value)}
+                  placeholder="Текст публікації або думка для обговорення..."
+                  rows="3"
+                  required
+                />
+                <div className="sidebar-tools">
+                  <select
+                    value={postCommunityId}
+                    onChange={e => setPostCommunityId(e.target.value)}
+                  >
+                    {communities.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="tool-chip"
+                    onClick={() => postMediaInputRef.current?.click()}
+                  >
+                    {postMediaFile ? `📎 ${postMediaFile.name}` : '🖼 Фото / Відео'}
+                  </button>
+                  <input
+                    ref={postMediaInputRef}
+                    hidden
+                    type="file"
+                    accept="image/*,video/*"
+                    onChange={e => setPostMediaFile(e.target.files?.[0] || null)}
+                  />
+                </div>
+
+                <input
+                  value={pollQuestion}
+                  onChange={e => setPollQuestion(e.target.value)}
+                  placeholder="Опитування (необов'язково): запитання..."
+                />
+                {pollQuestion.trim() && (
+                  <input
+                    value={pollOptionsText}
+                    onChange={e => setPollOptionsText(e.target.value)}
+                    placeholder="Варіанти через кому (наприклад: Так, Ні, Подивимось)"
+                  />
+                )}
+
+                <button className="auth-submit" disabled={uploading}>
+                  {uploading ? 'Публікація...' : 'Опублікувати'}
+                </button>
+              </form>
+
+              <div className="chat-filter-tabs tg-tabs tg-feed-filters">
+                {[
+                  ['new', 'Нові'],
+                  ['top', 'Популярні'],
+                  ['saved', 'Збережені']
+                ].map(([key, label]) => (
+                  <button
+                    type="button"
+                    key={key}
+                    className={postSort === key ? 'active' : ''}
+                    onClick={() => setPostSort(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+                <select
+                  value={postCommunityFilter}
+                  onChange={e => setPostCommunityFilter(e.target.value)}
+                >
+                  <option value="all">Усі спільноти</option>
+                  {communities.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {visiblePosts.map(post => {
+                const upCount = (post.upvotes || []).length
+                const downCount = (post.downvotes || []).length
+                const score = upCount - downCount
+                const isSaved = mySavedPosts.includes(post.id)
+
+                return (
+                  <article key={post.id} className="user-profile-card tg-post-card">
+                    <div className="group-info-head">
+                      <div className="tg-post-meta">
+                        <strong>{post.authorName || 'Користувач'}</strong>{' '}
+                        <small>{post.authorUsername || '@user'}</small>
+                        <span className="group-member-pill">{post.communityName || 'Спільнота'}</span>
+                        {post.repostOf && (
+                          <span className="group-member-pill">
+                            🔁 Репост @{post.repostOf.originalAuthorName}
+                          </span>
+                        )}
+                      </div>
+                      <div className="sidebar-tools">
+                        <span className="group-member-pill">👁 {post.viewsCount || 0}</span>
+                        <button
+                          type="button"
+                          className="tool-chip"
+                          onClick={() => toggleSavePost(post.id)}
+                        >
+                          {isSaved ? '🔖 Збережено' : '📑 Зберегти'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <h3>{post.title}</h3>
+                    <p>{post.body}</p>
+
+                    {post.mediaUrl && post.mediaType === 'image' && (
+                      <img
+                        className="message-media"
+                        src={post.mediaUrl}
+                        alt={post.title}
+                        loading="lazy"
+                      />
+                    )}
+                    {post.mediaUrl && post.mediaType === 'video' && (
+                      <video
+                        className="message-media"
+                        src={post.mediaUrl}
+                        controls
+                        playsInline
+                      />
+                    )}
+
+                    {post.poll?.question && (
+                      <div className="group-creator">
+                        <strong>📊 {post.poll.question}</strong>
+                        {(post.poll.options || []).map(opt => {
+                          const votesCount = (opt.votes || []).length
+                          const voted = (opt.votes || []).includes(user.uid)
+                          return (
+                            <button
+                              type="button"
+                              key={opt.id}
+                              className={`tool-chip ${voted ? 'active-chip' : ''}`}
+                              onClick={() => votePoll(post, opt.id)}
+                            >
+                              {opt.label} — {votesCount} голосів
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+
+                    <div className="sidebar-tools">
+                      <button
+                        type="button"
+                        className={`tool-chip ${(post.upvotes || []).includes(user.uid) ? 'active-chip' : ''}`}
+                        onClick={() => votePost(post, 1)}
+                      >
+                        ▲ За ({upCount})
+                      </button>
+                      <span className="group-member-pill">Рейтинг: {score}</span>
+                      <button
+                        type="button"
+                        className={`tool-chip ${(post.downvotes || []).includes(user.uid) ? 'active-chip' : ''}`}
+                        onClick={() => votePost(post, -1)}
+                      >
+                        ▼ Проти ({downCount})
+                      </button>
+                      <button
+                        type="button"
+                        className="tool-chip"
+                        onClick={() =>
+                          setRepostTargetId(repostTargetId === post.id ? null : post.id)
+                        }
+                      >
+                        🔁 Репост ({post.repostsCount || 0})
+                      </button>
+                      {post.authorId !== user.uid && (
+                        <button
+                          type="button"
+                          className="tool-chip"
+                          onClick={() => sendGiftToUser(GIFTS_CATALOG[0], post.authorId, post.id)}
+                        >
+                          ⭐ Підтримати ({post.starsReceived || 0} ⭐)
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="tool-chip"
+                        onClick={() =>
+                          reportTarget({
+                            targetType: 'post',
+                            targetId: post.id,
+                            targetUserId: post.authorId
+                          })
+                        }
+                      >
+                        🚩 Скарга
+                      </button>
+                    </div>
+
+                    {repostTargetId === post.id && (
+                      <div className="group-creator">
+                        <strong>Куди поширити публікацію?</strong>
+                        <div className="sidebar-tools">
+                          <button
+                            type="button"
+                            className="tool-chip active-chip"
+                            onClick={() => repostPostToFeed(post)}
+                          >
+                            📰 У мою стрічку
+                          </button>
+                          {chats.slice(0, 4).map(c => (
+                            <button
+                              type="button"
+                              key={c.id}
+                              className="tool-chip"
+                              onClick={() => sharePostToChat(post, c.id)}
+                            >
+                              ✉ {c.name || 'Чат'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="sidebar-tools">
+                      {POST_REACTIONS.map(emoji => {
+                        const list = (post.reactions || {})[emoji] || []
+                        return (
+                          <button
+                            type="button"
+                            key={emoji}
+                            className={`tool-chip ${list.includes(user.uid) ? 'active-chip' : ''}`}
+                            onClick={() => reactToPost(post, emoji)}
+                          >
+                            {emoji} {list.length || ''}
+                          </button>
+                        )
+                      })}
+                    </div>
+
+                    <div className="reel-comments-list">
+                      {(post.comments || []).map(c => (
+                        <div key={c.id} className="reel-comment-item">
+                          <b>{c.authorName}:</b>{' '}
+                          {c.parentAuthor && <em>@{c.parentAuthor} </em>}
+                          <span>{c.text}</span>{' '}
+                          <button
+                            type="button"
+                            className="tool-chip"
+                            onClick={() =>
+                              setReplyTargetComment(prev => ({ ...prev, [post.id]: c }))
+                            }
+                          >
+                            Відповісти
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    {replyTargetComment[post.id] && (
+                      <div className="reply-compose">
+                        <span>
+                          Відповідь <b>{replyTargetComment[post.id].authorName}</b>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setReplyTargetComment(prev => ({ ...prev, [post.id]: null }))
+                          }
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="reel-comment-form">
+                      <input
+                        value={commentDrafts[post.id] || ''}
+                        onChange={e =>
+                          setCommentDrafts(prev => ({ ...prev, [post.id]: e.target.value }))
+                        }
+                        placeholder="Написати коментар..."
+                      />
+                      <button type="button" onClick={() => addPostComment(post)}>
+                        ➤
+                      </button>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          </section>
+        ) : mainSection === 'communities' ? (
+          <section className="settings-page tg-scroll-section">
+            <header className="settings-header tg-header">
+              <div>
+                <h1>👥 Спільноти NovaChat</h1>
+                <p>Тематичні групи, правила, відкритий/закритий формат та стрічки</p>
+              </div>
+              <button
+                type="button"
+                className="mobile-back-button"
+                onClick={() => {
+                  setSelectedCommunityId(null)
+                  setMainSection('chats')
+                  setMobileChatOpen(false)
+                }}
+              >
+                ←
+              </button>
+            </header>
+
+            <div className="tg-section-body">
+              {selectedCommunityId ? (() => {
+                const selectedComm =
+                  communities.find(c => c.id === selectedCommunityId) || null
+
+                if (!selectedComm) {
+                  return (
+                    <div className="user-profile-card">
+                      <h3>Спільноту не знайдено</h3>
+                      <button
+                        type="button"
+                        className="tool-chip"
+                        onClick={() => setSelectedCommunityId(null)}
+                      >
+                        ← До списку спільнот
+                      </button>
+                    </div>
+                  )
+                }
+
+                const joined = myJoinedCommunities.includes(selectedComm.id)
+                const isOwner = selectedComm.ownerId === user.uid
+                const commPosts = posts.filter(p => p.communityId === selectedComm.id)
+
+                return (
+                  <>
+                    <div className="user-profile-card">
+                      <div className="group-info-head">
+                        <button
+                          type="button"
+                          className="tool-chip"
+                          onClick={() => setSelectedCommunityId(null)}
+                        >
+                          ← Усі спільноти
+                        </button>
+                        <span className="group-member-pill">
+                          {selectedComm.isPrivate ? '🔒 Закрита' : '🌐 Відкрита'}
+                        </span>
+                      </div>
+
+                      <h2>
+                        {selectedComm.name}{' '}
+                        <span className="group-member-pill">{selectedComm.category}</span>
+                      </h2>
+
+                      <p>{selectedComm.description || 'Тематична спільнота NovaChat.'}</p>
+
+                      <div className="user-profile-about">
+                        <h3>Правила спільноти</h3>
+                        <p>
+                          {selectedComm.rules ||
+                            'Будьте ввічливими та дотримуйтесь правил спільноти.'}
+                        </p>
+                      </div>
+
+                      <div className="group-members-list">
+                        <span className="group-member-pill">
+                          👥 Учасників: {selectedComm.membersCount ?? 1}
+                        </span>
+                        <span className="group-member-pill">
+                          📰 Публікацій: {commPosts.length}
+                        </span>
+                        {isOwner && (
+                          <span className="group-member-pill">👑 Ви власник</span>
+                        )}
+                      </div>
+
+                      <div className="sidebar-tools">
+                        <button
+                          type="button"
+                          className={`tool-chip ${joined ? 'active-chip' : ''}`}
+                          onClick={() => toggleJoinCommunity(selectedComm.id)}
+                        >
+                          {joined ? '✓ Підписаний' : '+ Підписатися'}
+                        </button>
+
+                        <button
+                          type="button"
+                          className="tool-chip"
+                          onClick={() => {
+                            setPostCommunityFilter(selectedComm.id)
+                            setPostCommunityId(selectedComm.id)
+                            setSelectedCommunityId(null)
+                            setMainSection('feed')
+                          }}
+                        >
+                          📰 Перейти до дописів
+                        </button>
+
+                        {isOwner && (
+                          <button
+                            type="button"
+                            className="danger-settings-button"
+                            onClick={async () => {
+                              if (!window.confirm('Видалити цю спільноту?')) return
+                              try {
+                                await deleteDoc(doc(db, 'communities', selectedComm.id))
+                                setSelectedCommunityId(null)
+                              } catch (err) {
+                                console.error(err)
+                                setError('Не вдалося видалити спільноту.')
+                              }
+                            }}
+                          >
+                            🗑 Видалити спільноту
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="settings-form">
+                      <h3>Останні публікації в спільноті ({commPosts.length})</h3>
+                      {commPosts.length ? (
+                        commPosts.map(p => (
+                          <div key={p.id} className="reel-comment-item">
+                            <b>{p.title}</b> — <span>{p.authorName || 'Користувач'}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="settings-muted">
+                          У цій спільноті ще немає публікацій.
+                        </p>
+                      )}
+                    </div>
+                  </>
+                )
+              })() : (
+                <>
+                  <form className="settings-form" onSubmit={createCommunity}>
+                    <h3>Створити спільноту</h3>
+                    <input
+                      value={newCommName}
+                      onChange={e => setNewCommName(e.target.value)}
+                      placeholder="Назва спільноти..."
+                      required
+                    />
+                    <select
+                      value={newCommCategory}
+                      onChange={e => setNewCommCategory(e.target.value)}
+                    >
+                      <option value="Технології">Технології</option>
+                      <option value="Ігри">Ігри</option>
+                      <option value="Навчання">Навчання</option>
+                      <option value="Автомобілі">Автомобілі</option>
+                      <option value="Музика">Музика</option>
+                    </select>
+                    <input
+                      value={newCommDesc}
+                      onChange={e => setNewCommDesc(e.target.value)}
+                      placeholder="Короткий опис..."
+                    />
+                    <input
+                      value={newCommRules}
+                      onChange={e => setNewCommRules(e.target.value)}
+                      placeholder="Правила спільноти..."
+                    />
+                    <label className="settings-toggle">
+                      <span>
+                        <strong>Закрита спільнота</strong>
+                        <small>Обмежений доступ для учасників</small>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={newCommPrivate}
+                        onChange={e => setNewCommPrivate(e.target.checked)}
+                      />
+                    </label>
+                    <button className="auth-submit" type="submit">
+                      Створити спільноту
+                    </button>
+                  </form>
+
+                  <div className="sidebar-tools">
+                    <button
+                      type="button"
+                      className={`tool-chip ${!onlyMyCommunities ? 'active-chip' : ''}`}
+                      onClick={() => setOnlyMyCommunities(false)}
+                    >
+                      Усі спільноти ({communities.length})
+                    </button>
+                    <button
+                      type="button"
+                      className={`tool-chip ${onlyMyCommunities ? 'active-chip' : ''}`}
+                      onClick={() => setOnlyMyCommunities(true)}
+                    >
+                      Мої створені ({communities.filter(c => c.ownerId === user.uid).length})
+                    </button>
+                  </div>
+
+                  {(onlyMyCommunities
+                    ? communities.filter(c => c.ownerId === user.uid)
+                    : communities
+                  ).map(comm => {
+                    const joined = myJoinedCommunities.includes(comm.id)
+                    const isOwner = comm.ownerId === user.uid
+
+                    return (
+                      <div key={comm.id} className="user-profile-card tg-community-card">
+                        <div className="group-info-head">
+                          <div className="tg-comm-title-row">
+                            <strong>{comm.name}</strong>
+                            <span className="group-member-pill">{comm.category}</span>
+                            {isOwner && (
+                              <span className="group-member-pill">👑 Моя</span>
+                            )}
+                          </div>
+                          <span className="group-member-pill">
+                            {comm.isPrivate ? '🔒 Закрита' : '🌐 Відкрита'}
+                          </span>
+                        </div>
+                        <p>{comm.description}</p>
+                        <p className="settings-muted">Правила: {comm.rules}</p>
+                        <div className="sidebar-tools">
+                          <button
+                            type="button"
+                            className="tool-chip"
+                            onClick={() => setSelectedCommunityId(comm.id)}
+                          >
+                            👁 Переглянути
+                          </button>
+                          <button
+                            type="button"
+                            className={`tool-chip ${joined ? 'active-chip' : ''}`}
+                            onClick={() => toggleJoinCommunity(comm.id)}
+                          >
+                            {joined ? '✓ Підписаний' : '+ Підписатися'}
+                          </button>
+                          <button
+                            type="button"
+                            className="tool-chip"
+                            onClick={() => {
+                              setPostCommunityFilter(comm.id)
+                              setPostCommunityId(comm.id)
+                              setMainSection('feed')
+                            }}
+                          >
+                            📰 Дописи спільноти
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+
+                  {onlyMyCommunities &&
+                    communities.filter(c => c.ownerId === user.uid).length === 0 && (
+                      <div className="user-profile-card">
+                        <p className="settings-muted">
+                          Ви ще не створили жодної власної спільноти. Заповніть форму вище, щоб створити першу.
+                        </p>
+                      </div>
+                    )}
+                </>
+              )}
+            </div>
+          </section>
+        ) : mainSection === 'ai' ? (
+          <section className="settings-page tg-ai-page tg-scroll-section">
+            <header className="settings-header tg-header">
+              <div>
+                <h1>🤖 Nova AI</h1>
+                <p>Відповіді на запитання, пояснення навчальних тем і чернетки для чатів</p>
+              </div>
+              <button
+                type="button"
+                className="mobile-back-button"
+                onClick={() => {
+                  setMainSection('chats')
+                  setMobileChatOpen(false)
+                }}
+              >
+                ←
+              </button>
+            </header>
+
+            <div className="sidebar-tools">
+              {[
+                ['answer', '💡 Відповідь'],
+                ['study', '📚 Навчання'],
+                ['draft', '✉ Чернетка']
+              ].map(([key, label]) => (
+                <button
+                  type="button"
+                  key={key}
+                  className={`tool-chip ${aiMode === key ? 'active-chip' : ''}`}
+                  onClick={() => setAiMode(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="tg-ai-stream">
+              {aiHistory.map(item => (
+                <div
+                  key={item.id}
+                  className={`tg-ai-bubble ${item.role === 'user' ? 'mine' : 'assistant'}`}
+                >
+                  <div className="tg-ai-role">
+                    {item.role === 'user' ? 'Ви' : '🤖 Nova AI'}
+                  </div>
+                  <FormattedAiText text={item.text} />
+                  {item.role === 'assistant' && activeId && (
+                    <div className="sidebar-tools">
+                      <button
+                        type="button"
+                        className="tool-chip"
+                        onClick={() => {
+                          setMessage(item.text.replace(/\*\*/g, ''))
+                          setMainSection('chats')
+                          setMobileChatOpen(true)
+                        }}
+                      >
+                        💬 Вставити в активний чат
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <form onSubmit={handleAskNovaAi} className="reel-comment-form tg-ai-form">
+              <input
+                value={aiPrompt}
+                onChange={e => setAiPrompt(e.target.value)}
+                placeholder="Запитай Nova AI або введи тему..."
+              />
+              <button type="submit" disabled={!aiPrompt.trim()}>
+                ➤
+              </button>
+            </form>
+          </section>
+        ) : mainSection === 'stars' ? (
+          <section className="settings-page tg-stars-page tg-scroll-section">
+            <header className="settings-header tg-header">
+              <div>
+                <h1>⭐ NovaStars, 🎨 Персоналізація та 💛 Підтримка</h1>
+                <p>Баланс: {myStars} ⭐ · Карма: {myKarma}</p>
+              </div>
+              <button
+                type="button"
+                className="mobile-back-button"
+                onClick={() => {
+                  setMainSection('chats')
+                  setMobileChatOpen(false)
+                }}
+              >
+                ←
+              </button>
+            </header>
+
+            <div className="tg-section-body">
+              <div className="settings-form">
+                <h3>Поповнити NovaStars</h3>
+                <div className="sidebar-tools">
+                  {STAR_PACKS.map(pack => (
+                    <button
+                      type="button"
+                      key={pack.id}
+                      className="auth-submit"
+                      onClick={() => buyStarPack(pack)}
+                    >
+                      Купити {pack.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="settings-form">
+                <h3>🎨 Персоналізація за NovaStars</h3>
+                <div className="tg-pers-list">
+                  {PERSONALIZATION_ITEMS.map(item => {
+                    const owned = ownedItems.includes(item.id)
+                    const equipped = activePersonalization[item.category] === item.value
+                    return (
+                      <div key={item.id} className="tg-pers-card">
+                        <div className="tg-pers-preview-row">
+                          <span
+                            className="tg-pers-swatch"
+                            style={{ background: item.preview }}
+                          />
+                          <div className="tg-pers-meta">
+                            <strong>{item.title}</strong>
+                            <small className="settings-muted">{item.categoryLabel}</small>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className={`tool-chip ${equipped ? 'active-chip' : ''}`}
+                          onClick={() => handlePersonalizationItem(item)}
+                        >
+                          {equipped
+                            ? '✓ Активно'
+                            : owned
+                              ? 'Вдягнути'
+                              : `Купити (${item.price} ⭐)`}
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="settings-form">
+                <h3>💛 Авторська підтримка</h3>
+                <p className="settings-muted">
+                  Отримано зірок: <b>{supportStats.totalStarsReceived || 0} ⭐</b> · Підтримувачів:{' '}
+                  <b>{supportStats.supportersCount || 0}</b>
+                </p>
+
+                {(supportStats.topSupporters || []).length > 0 && (
+                  <div className="group-members-list">
+                    {(supportStats.topSupporters || []).map(sup => (
+                      <span key={sup.uid} className="group-member-pill">
+                        🏆 {sup.name}: {sup.stars} ⭐
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="tg-support-controls">
+                  <select
+                    value={giftRecipientUid}
+                    onChange={e => setGiftRecipientUid(e.target.value)}
+                  >
+                    <option value="">Обери автора...</option>
+                    {knownUsersList.map(u => (
+                      <option key={u.uid} value={u.uid}>
+                        {u.name || 'Користувач'} ({u.username || u.email})
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="number"
+                    min="5"
+                    max="1000"
+                    value={supportAmount}
+                    onChange={e => setSupportAmount(Number(e.target.value) || 10)}
+                    placeholder="Кількість ⭐"
+                  />
+                  <button
+                    type="button"
+                    className="tool-chip active-chip"
+                    onClick={() =>
+                      sendGiftToUser(
+                        {
+                          id: 'support',
+                          name: 'Підтримка',
+                          icon: '💛',
+                          price: supportAmount,
+                          rarity: 'Підтримка'
+                        },
+                        giftRecipientUid,
+                        null,
+                        supportAmount
+                      )
+                    }
+                  >
+                    Підтримати ({supportAmount} ⭐)
+                  </button>
+                </div>
+
+                <div className="sidebar-tools">
+                  {GIFTS_CATALOG.map(gift => (
+                    <button
+                      type="button"
+                      key={gift.id}
+                      className="tool-chip"
+                      onClick={() => sendGiftToUser(gift, giftRecipientUid)}
+                    >
+                      {gift.icon} {gift.name} — {gift.price} ⭐ ({gift.rarity})
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="settings-form">
+                <h3>🎁 Моя колекція подарунків ({myGifts.length})</h3>
+                <div className="group-members-list">
+                  {myGifts.length ? (
+                    myGifts.map((g, idx) => (
+                      <span key={g.id || idx} className="group-member-pill">
+                        {g.icon} {g.name} ({g.price} ⭐) · від {g.fromName}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="settings-muted">Поки немає отриманих подарунків.</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="settings-form">
+                <h3>Історія транзакцій NovaStars</h3>
+                <div className="tg-tx-list">
+                  {starTransactions.map(tx => (
+                    <div key={tx.id} className="tg-tx-row">
+                      <span>{tx.title}</span>
+                      <strong>
+                        {tx.delta >= 0 ? `+${tx.delta}` : tx.delta} ⭐
+                      </strong>
+                    </div>
+                  ))}
+                  {!starTransactions.length && (
+                    <p className="settings-muted">Транзакцій поки немає.</p>
+                  )}
+                </div>
+              </div>
             </div>
           </section>
         ) : activeChat ? (
           <>
-            <header className="chat-header">
+            <header className="chat-header tg-header">
               <button
                 type="button"
                 className="mobile-back-button"
@@ -2124,6 +4527,7 @@ function App() {
               >
                 <Avatar
                   photoURL={activeProfile.photoURL}
+                  frame={activeProfile.activePersonalization?.avatarFrame}
                   fallback={activeChat.isGroup ? '👥' : '👤'}
                 />
                 <span className="header-info">
@@ -2132,8 +4536,8 @@ function App() {
                     {activeChat.isGroup
                       ? `${participantIds.length} учасників`
                       : activeProfile.isOnline
-                        ? '🟢 У мережі'
-                        : `Був(ла) ${lastSeenText(activeProfile.lastSeen)}`}
+                        ? '🟢 у мережі'
+                        : `був(ла) ${lastSeenText(activeProfile.lastSeen)}`}
                   </span>
                 </span>
               </button>
@@ -2210,6 +4614,40 @@ function App() {
               </div>
             )}
 
+            {scheduledMessages.filter(s => s.chatId === activeId && s.status === 'pending').length >
+              0 && (
+              <div className="pinned-banner">
+                <span>
+                  ⏰ Відкладених повідомлень у чаті:{' '}
+                  <b>
+                    {
+                      scheduledMessages.filter(s => s.chatId === activeId && s.status === 'pending')
+                        .length
+                    }
+                  </b>
+                  {scheduledMessages
+                    .filter(s => s.chatId === activeId && s.status === 'pending')
+                    .map(s => (
+                      <span key={s.id} style={{ marginLeft: 8 }}>
+                        «{s.text.slice(0, 24)}» (
+                        {new Date(s.sendAtMs).toLocaleTimeString('uk-UA', {
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                        )
+                        <button
+                          type="button"
+                          onClick={() => cancelScheduledMessage(s.id)}
+                          style={{ marginLeft: 4 }}
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    ))}
+                </span>
+              </div>
+            )}
+
             {showChatMenu && activeChat.isGroup && (
               <div className="group-info-panel">
                 <div className="group-info-head">
@@ -2230,14 +4668,29 @@ function App() {
               </div>
             )}
 
-            <section className="messages">
+            <section
+              className={`messages tg-messages ${
+                activePersonalization.chatBg === 'midnight'
+                  ? 'chat-bg-midnight'
+                  : activePersonalization.chatBg === 'aurora'
+                    ? 'chat-bg-aurora'
+                    : ''
+              }`}
+            >
               {filteredMessages.map(msg => {
                 const mine = msg.senderId === user.uid
                 const isEditing = editingMessage?.id === msg.id
+                const seenByOthers = activeChat.isGroup
+                  ? otherUids.length > 0 &&
+                    otherUids.every(uid => (msg.readBy || []).includes(uid))
+                  : Boolean(
+                      msg.read ||
+                        (otherUid && (msg.readBy || []).includes(otherUid))
+                    )
 
                 return (
                   <div key={msg.id} className={`message-row ${mine ? 'mine' : ''}`}>
-                    <div className="message-bubble">
+                    <div className="message-bubble tg-bubble">
                       {!mine && activeChat.isGroup && (
                         <strong className="message-sender">{msg.senderName}</strong>
                       )}
@@ -2309,17 +4762,26 @@ function App() {
                               📎 {msg.fileName || 'Завантажити файл'}
                             </a>
                           )}
-                          {msg.text && <span className="message-text">{msg.text}</span>}
-                          {msg.edited && <small className="edited-label">ред.</small>}
+
+                          <div className="tg-bubble-body">
+                            {msg.text && <span className="message-text">{msg.text}</span>}
+                            {msg.edited && <small className="edited-label">ред.</small>}
+                            <span className="message-time tg-inline-time">
+                              {timeText(msg.createdAt)}
+                              {mine && (
+                                <span
+                                  className={`read-ticks ${seenByOthers ? 'seen' : ''}`}
+                                  title={seenByOthers ? 'Побачено' : 'Надіслано'}
+                                >
+                                  {seenByOthers ? ' ✓✓' : ' ✓'}
+                                </span>
+                              )}
+                            </span>
+                          </div>
                         </>
                       )}
 
-                      <span className="message-time">
-                        {timeText(msg.createdAt)}
-                        {mine ? (msg.read ? ' ✓✓' : ' ✓') : ''}
-                      </span>
-
-                      <div className="message-actions">
+                      <div className="message-actions tg-msg-toolbar">
                         <button
                           type="button"
                           title="Відповісти"
@@ -2426,7 +4888,23 @@ function App() {
               </div>
             )}
 
-            <form className="message-form" onSubmit={sendMessage}>
+            {scheduleEnabled && (
+              <div className="reply-compose">
+                <span>
+                  ⏰ Час відправлення:{' '}
+                  <input
+                    type="datetime-local"
+                    value={scheduleAt}
+                    onChange={e => setScheduleAt(e.target.value)}
+                  />
+                </span>
+                <button type="button" onClick={() => setScheduleEnabled(false)}>
+                  ✕
+                </button>
+              </div>
+            )}
+
+            <form className="message-form tg-input-bar" onSubmit={sendMessage}>
               <button
                 type="button"
                 className="attach-button"
@@ -2435,6 +4913,15 @@ function App() {
                 disabled={uploading || recording}
               >
                 ＋
+              </button>
+              <button
+                type="button"
+                className={`attach-button ${scheduleEnabled ? 'active-chip' : ''}`}
+                title="Відкладене повідомлення"
+                onClick={() => setScheduleEnabled(v => !v)}
+                disabled={uploading || recording}
+              >
+                ⏰
               </button>
               <input
                 ref={fileInputRef}
@@ -2453,7 +4940,9 @@ function App() {
                 placeholder={
                   recording
                     ? `Запис голосового... ${recordingSec}с`
-                    : 'Написати повідомлення...'
+                    : scheduleEnabled
+                      ? 'Напиши відкладене повідомлення...'
+                      : 'Написати повідомлення...'
                 }
                 disabled={recording}
               />
@@ -2470,10 +4959,10 @@ function App() {
 
               <button
                 type="submit"
-                className="send-button"
+                className="send-button tg-send-btn"
                 disabled={!message.trim() || uploading || recording}
               >
-                ➤
+                {scheduleEnabled ? '⏰' : '➤'}
               </button>
             </form>
 

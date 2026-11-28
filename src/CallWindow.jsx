@@ -1,4 +1,3 @@
-
 import { useEffect, useRef, useState } from 'react'
 import {
   addDoc,
@@ -52,15 +51,30 @@ export default function CallWindow({
     let unsubscribeCall = null
     let disposed = false
 
+    closingRef.current = false
+    processedSignalsRef.current.clear()
+    pendingCandidatesRef.current = []
+
     const closeLocalResources = () => {
       if (disposed) return
       disposed = true
 
-      if (unsubscribeSignals) unsubscribeSignals()
-      if (unsubscribeCall) unsubscribeCall()
+      if (unsubscribeSignals) {
+        unsubscribeSignals()
+        unsubscribeSignals = null
+      }
+      if (unsubscribeCall) {
+        unsubscribeCall()
+        unsubscribeCall = null
+      }
 
-      peerConnectionRef.current?.close()
-      peerConnectionRef.current = null
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.ontrack = null
+        peerConnectionRef.current.onicecandidate = null
+        peerConnectionRef.current.onconnectionstatechange = null
+        peerConnectionRef.current.close()
+        peerConnectionRef.current = null
+      }
 
       localStreamRef.current?.getTracks().forEach(track => track.stop())
       remoteStreamRef.current?.getTracks().forEach(track => track.stop())
@@ -73,7 +87,7 @@ export default function CallWindow({
       if (closingRef.current) return
       closingRef.current = true
 
-      if (updateServer) {
+      if (updateServer && callId) {
         try {
           await updateDoc(doc(db, 'calls', callId), {
             status: 'ended',
@@ -89,6 +103,7 @@ export default function CallWindow({
     }
 
     const sendSignal = async data => {
+      if (!callId || !user?.uid || !peerId) return
       await addDoc(collection(db, 'calls', callId, 'signals'), {
         ...data,
         from: user.uid,
@@ -112,18 +127,41 @@ export default function CallWindow({
 
     const startCall = async () => {
       try {
+        setError('')
+
+        if (!callId || !user?.uid || !peerId) {
+          throw new Error('Некоректні дані дзвінка.')
+        }
+
         if (!navigator.mediaDevices?.getUserMedia) {
           throw new Error(
-            'Браузер не підтримує доступ до камери та мікрофона. Відкрий сайт через HTTPS або localhost.'
+            'Браузер не підтримує доступ до камери або мікрофона. Відкрий сайт через HTTPS або localhost.'
           )
         }
 
         setStatus('Запит доступу до пристроїв...')
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: callType === 'video'
-        })
+        let stream
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video:
+              callType === 'video'
+                ? { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
+                : false
+          })
+        } catch (mediaErr) {
+          if (callType === 'video') {
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: true,
+              video: false
+            })
+            setCameraOff(true)
+            setError('Камера недоступна — увімкнено лише мікрофон.')
+          } else {
+            throw mediaErr
+          }
+        }
 
         if (disposed) {
           stream.getTracks().forEach(track => track.stop())
@@ -132,7 +170,7 @@ export default function CallWindow({
 
         localStreamRef.current = stream
 
-        if (localVideoRef.current) {
+        if (localVideoRef.current && callType === 'video') {
           localVideoRef.current.srcObject = stream
         }
 
@@ -152,15 +190,15 @@ export default function CallWindow({
 
         pc.ontrack = event => {
           event.streams[0]?.getTracks().forEach(track => {
-            const exists = remoteStream.getTracks().some(
-              item => item.id === track.id
-            )
-
-            if (!exists) remoteStream.addTrack(track)
+            const exists = remoteStream.getTracks().some(item => item.id === track.id)
+            if (!exists) {
+              remoteStream.addTrack(track)
+            }
           })
 
           if (remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = remoteStream
+            remoteVideoRef.current.play?.().catch(() => {})
           }
         }
 
@@ -180,13 +218,10 @@ export default function CallWindow({
 
           if (pc.connectionState === 'connected') {
             setStatus('З’єднання встановлено')
-
-            updateDoc(doc(db, 'calls', callId), {
-              status: 'active'
-            }).catch(err => console.error(err))
-          }
-
-          if (
+            updateDoc(doc(db, 'calls', callId), { status: 'active' }).catch(() => {})
+          } else if (pc.connectionState === 'connecting') {
+            setStatus('З’єднання встановлюється...')
+          } else if (
             pc.connectionState === 'failed' ||
             pc.connectionState === 'disconnected'
           ) {
@@ -197,20 +232,27 @@ export default function CallWindow({
         unsubscribeCall = onSnapshot(
           doc(db, 'calls', callId),
           snapshot => {
+            if (closingRef.current) return
+
             if (!snapshot.exists()) {
-              setError('Дзвінок більше не існує.')
               finishCall(false)
               return
             }
 
-            if (snapshot.data().status === 'ended') {
-              setStatus('Дзвінок завершено')
+            const data = snapshot.data()
+            if (data.status === 'ended') {
               finishCall(false)
+            } else if (
+              data.status === 'accepted' &&
+              isCaller &&
+              pc.connectionState !== 'connected'
+            ) {
+              setStatus('З’єднання встановлюється...')
             }
           },
           err => {
             console.error('Статус дзвінка:', err)
-            setError('Не вдалося перевірити статус дзвінка.')
+            setError('Не вдалося перевірити статус дзвінка у Firestore.')
           }
         )
 
@@ -226,7 +268,6 @@ export default function CallWindow({
               if (change.type !== 'added') continue
 
               const signalId = change.doc.id
-
               if (processedSignalsRef.current.has(signalId)) continue
               processedSignalsRef.current.add(signalId)
 
@@ -236,10 +277,7 @@ export default function CallWindow({
                 if (signal.type === 'offer' && !isCaller) {
                   if (pc.remoteDescription) continue
 
-                  await pc.setRemoteDescription(
-                    new RTCSessionDescription(signal.sdp)
-                  )
-
+                  await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp))
                   await flushPendingCandidates(pc)
 
                   const answer = await pc.createAnswer()
@@ -247,21 +285,15 @@ export default function CallWindow({
 
                   await sendSignal({
                     type: 'answer',
-                    sdp: {
-                      type: answer.type,
-                      sdp: answer.sdp
-                    }
+                    sdp: { type: answer.type, sdp: answer.sdp }
                   })
 
-                  setStatus('Очікування підключення...')
+                  setStatus('З’єднання встановлюється...')
                 }
 
                 if (signal.type === 'answer' && isCaller) {
                   if (!pc.currentRemoteDescription) {
-                    await pc.setRemoteDescription(
-                      new RTCSessionDescription(signal.sdp)
-                    )
-
+                    await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp))
                     await flushPendingCandidates(pc)
                     setStatus('З’єднання встановлюється...')
                   }
@@ -269,22 +301,20 @@ export default function CallWindow({
 
                 if (signal.type === 'candidate' && signal.candidate) {
                   if (pc.remoteDescription) {
-                    await pc.addIceCandidate(
-                      new RTCIceCandidate(signal.candidate)
-                    )
+                    await pc.addIceCandidate(new RTCIceCandidate(signal.candidate))
                   } else {
                     pendingCandidatesRef.current.push(signal.candidate)
                   }
                 }
               } catch (err) {
                 console.error('Обробка сигналу:', err)
-                setError('Помилка встановлення з’єднання.')
+                setError('Помилка обміну WebRTC-сигналами.')
               }
             }
           },
           err => {
             console.error('Підписка на сигнали:', err)
-            setError('Не вдалося отримати сигнали дзвінка.')
+            setError('Немає доступу до сигналів дзвінка (перевір правила Firestore).')
           }
         )
 
@@ -294,22 +324,19 @@ export default function CallWindow({
 
           await sendSignal({
             type: 'offer',
-            sdp: {
-              type: offer.type,
-              sdp: offer.sdp
-            }
+            sdp: { type: offer.type, sdp: offer.sdp }
           })
 
           setStatus('Виклик надсилається...')
         } else {
-          setStatus('Очікування відповіді співрозмовника...')
+          setStatus('Підключення до розмови...')
         }
       } catch (err) {
         console.error('Помилка дзвінка:', err)
-
+        setStatus('Помилка підключення')
         setError(
           err.name === 'NotAllowedError'
-            ? 'Немає дозволу на камеру або мікрофон. Перевір налаштування браузера.'
+            ? 'Немає дозволу на камеру або мікрофон. Перевір дозволи браузера/пристрою.'
             : err.message || 'Не вдалося запустити дзвінок.'
         )
       }
@@ -320,7 +347,7 @@ export default function CallWindow({
     return () => {
       closeLocalResources()
     }
-  }, [callId, user.uid, peerId, callType, isCaller])
+  }, [callId, user?.uid, peerId, callType, isCaller])
 
   function toggleMicrophone() {
     const stream = localStreamRef.current
@@ -330,7 +357,6 @@ export default function CallWindow({
     stream.getAudioTracks().forEach(track => {
       track.enabled = !nextValue
     })
-
     setMuted(nextValue)
   }
 
@@ -338,11 +364,13 @@ export default function CallWindow({
     const stream = localStreamRef.current
     if (!stream) return
 
+    const videoTracks = stream.getVideoTracks()
+    if (!videoTracks.length) return
+
     const nextValue = !cameraOff
-    stream.getVideoTracks().forEach(track => {
+    videoTracks.forEach(track => {
       track.enabled = !nextValue
     })
-
     setCameraOff(nextValue)
   }
 
@@ -350,84 +378,76 @@ export default function CallWindow({
     if (closingRef.current) return
     closingRef.current = true
 
-    try {
-      await updateDoc(doc(db, 'calls', callId), {
-        status: 'ended',
-        endedAt: serverTimestamp()
-      })
-    } catch (err) {
-      console.error('Завершення дзвінка:', err)
+    if (callId) {
+      try {
+        await updateDoc(doc(db, 'calls', callId), {
+          status: 'ended',
+          endedAt: serverTimestamp()
+        })
+      } catch (err) {
+        console.error('Завершення дзвінка:', err)
+      }
     }
 
-    peerConnectionRef.current?.close()
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close()
+      peerConnectionRef.current = null
+    }
     localStreamRef.current?.getTracks().forEach(track => track.stop())
     remoteStreamRef.current?.getTracks().forEach(track => track.stop())
+    localStreamRef.current = null
+    remoteStreamRef.current = null
 
     onCloseRef.current?.()
   }
 
+  const isConnected = status === 'З’єднання встановлено'
+  const isCalling = !isConnected && !error
+  const initialLetter = (peerName || 'К').trim().charAt(0).toUpperCase()
+
   return (
     <div className="call-overlay">
-      <div className="call-window">
-        <div className="call-top">
-          <div>
-            <h2>{peerName || 'Користувач'}</h2>
-            <p>{status}</p>
-          </div>
-
-          <button
-            type="button"
-            className="call-close"
-            onClick={hangUp}
-            title="Завершити дзвінок"
-          >
-            ✕
-          </button>
+      <div className={`call-card ${callType === 'video' ? 'video-mode' : ''}`}>
+        <div className="call-header-info">
+          <h2 className="call-peer-name">{peerName || 'Користувач'}</h2>
+          <p className={`call-status-text ${isConnected ? 'connected' : ''}`}>
+            {status}
+          </p>
         </div>
 
         {callType === 'video' ? (
-          <div className="call-videos">
-            <div className="remote-video-wrap">
-              <video
-                ref={remoteVideoRef}
-                autoPlay
-                playsInline
-              />
+          <div className="video-call-stage">
+            <video
+              ref={remoteVideoRef}
+              className="remote-video"
+              autoPlay
+              playsInline
+            />
 
-              <span className="video-label">
-                {peerName || 'Співрозмовник'}
-              </span>
-            </div>
-
-            <div className="local-video-wrap">
-              <video
-                ref={localVideoRef}
-                autoPlay
-                muted
-                playsInline
-              />
-
-              {cameraOff && (
-                <span className="camera-disabled">
-                  Камера вимкнена
-                </span>
-              )}
-            </div>
+            <video
+              ref={localVideoRef}
+              className="local-video-pip"
+              autoPlay
+              muted
+              playsInline
+            />
           </div>
         ) : (
-          <div className="audio-call-content">
-            <div className="call-avatar">👤</div>
-            <h3>{peerName || 'Користувач'}</h3>
-            <p>{status}</p>
+          <>
+            <div className={`call-avatar-ring ${isCalling ? 'calling' : ''}`}>
+              <div className="call-avatar-inner">
+                {initialLetter}
+              </div>
+            </div>
             <audio
               ref={remoteVideoRef}
               autoPlay
             />
-          </div>
+          </>
         )}
 
         {error && (
-          <div className="call-error">
+          <div className="auth-error">
             {error}
           </div>
         )}
@@ -435,30 +455,32 @@ export default function CallWindow({
         <div className="call-controls">
           <button
             type="button"
+            className={`call-btn ${muted ? 'muted' : ''}`}
             onClick={toggleMicrophone}
             title={muted ? 'Увімкнути мікрофон' : 'Вимкнути мікрофон'}
           >
-            {muted ? '🔇' : '🎤'}
+            <span>{muted ? '🔇' : '🎤'}</span>
             <span>{muted ? 'Увімкнути' : 'Мікрофон'}</span>
           </button>
 
           {callType === 'video' && (
             <button
               type="button"
+              className={`call-btn ${cameraOff ? 'active' : ''}`}
               onClick={toggleCamera}
               title={cameraOff ? 'Увімкнути камеру' : 'Вимкнути камеру'}
             >
-              {cameraOff ? '📷' : '🎥'}
-              <span>{cameraOff ? 'Камера' : 'Відео'}</span>
+              <span>{cameraOff ? '📷' : '🎥'}</span>
+              <span>{cameraOff ? 'Увімкнути камеру' : 'Вимкнути камеру'}</span>
             </button>
           )}
 
           <button
             type="button"
-            className="hangup-button"
+            className="call-btn end-call"
             onClick={hangUp}
           >
-            ☎
+            <span>☎</span>
             <span>Завершити</span>
           </button>
         </div>
